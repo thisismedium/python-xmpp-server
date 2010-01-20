@@ -5,56 +5,78 @@
 
 from __future__ import absolute_import
 import errno, socket, logging
-from xml import sax
+from lxml import etree
 
-__all__ = ('XMLHandler', 'SAXStream')
+__all__ = ('XMLHandler', 'XMLParser', 'XMLStream')
 
 class XMLHandler(object):
     """Wrap a SAX ContentHandler up in the TCPHandler interface.  Here
     is an example XML Echo server:
 
-        from xml import sax
-        import tcpserver
+        import sys, xmpp
 
-        class Echo(sax.handler.ContentHandler):
+        class Echo(object):
 
             def __init__(self, stream):
-                sax.handler.ContentHandler.__init__(self)
                 self._stream = stream
 
-            def startDocument(self):
-                self._stream.write(u'<?xml version="1.0" encoding="utf-8"?>\n')
-
-            def startElement(self, name, attrs):
-                self._stream.write(u'<' + name)
-                for (name, value) in attrs.items():
-                    self._stream.write(u' %s="%s"' % (name, sax.saxutils.escape(value)))
-                self._stream.write(u'>')
+            def start(self, name, attrs):
+                self._stream.write('start %s %r\n' % (name, attrs.items()))
 
             def endElement(self, name):
-                self._stream.write(u'</%s>' % name)
+                self._stream.write('end %s\n' % name)
 
-            def characters(self, content):
-                self._stream.write(sax.saxutils.escape(content))
+            def data(self, data):
+                self._stream.write('data: %r\n' % data)
 
-            def ignorableWhitespace(self, content):
-                self._stream.write(content)
+            def close(self):
+                self._stream.write('goodbye!')
 
-        tcpserver.TCPServer(XMLHandler(Echo)).listen('127.0.0.1', 9000)
+        if __name__ == '__main__':
+            xmpp.TCPServer(xmpp.XMLHandler(Echo)).listen(*sys.argv[1].split(':'))
     """
 
     def __init__(self, ContentHandler):
         self.ContentHandler = ContentHandler
 
     def __call__(self, sock, addr, io_loop):
-        SAXStream(self.ContentHandler, sock, io_loop)
+        XMLStream(self.ContentHandler, sock, io_loop)
+        return self
 
-class SAXStream(object):
+class XMLParser(etree.XMLParser):
+    """Wrap the lxml XMLParser to require a target and prime the
+    incremental parser to avoid hanging on an opening stream tag."""
+
+    def __init__(self, target, **kwargs):
+        etree.XMLParser.__init__(self, target=target, **kwargs)
+
+        ## Prime the XMLParser.  Without this, if the first chunk
+        ## contains only an opening tag (i.e. <stream:stream ...>),
+        ## the ContentHandler events will not be triggered until the
+        ## next chunk arrives.
+        self.feed('')
+
+    def reset(self):
+        self.close()
+        self.feed('') # Prime the XMLParser
+        return self
+
+    def close(self):
+        try:
+            etree.XMLParser.close(self)
+        except etree.XMLSyntaxError:
+            ## This exception can be thrown if the parser is
+            ## closed before all open xml elements are closed.
+            ## Ignore this since it's common with <stream:stream/>
+            pass
+        return self
+
+class XMLStream(object):
     """An XML Stream based on the tornado IOStream class.  As data is
     read from the network socket, it is fed into a SAX parser.  SAX
     events are handled by an instance of the ContentHandler class,
     which should conform to Python's XMLReader interface and accept a
-    SAXStream instance as the single argument to __init__()."""
+    XMLStream instance as the single argument to __init__()."""
 
     def __init__(self, ContentHandler, socket, io_loop):
         self.io_loop = io_loop
@@ -63,8 +85,7 @@ class SAXStream(object):
         self._state = io_loop.ERROR | io_loop.READ
         self._wb = u''
 
-        self._parser = sax.make_parser()
-        self._parser.setContentHandler(ContentHandler(self))
+        self._parser = XMLParser(ContentHandler(self))
 
         self.io_loop.add_handler(socket.fileno(), self._handle, self._state)
 
@@ -74,12 +95,16 @@ class SAXStream(object):
                 self._parser.close()
             except:
                 logging.error(
-                    'SAXStream: caught exception while closing parser.',
+                    'XMLStream: caught exception while closing parser.',
                     exc_info=True
                 )
             self.io_loop.remove_handler(self.socket.fileno())
             self.socket.close()
             self.socket = None
+        return self
+
+    def reset(self):
+        self._parser.reset()
         return self
 
     def write(self, data):
