@@ -3,11 +3,10 @@
 
 """pong -- an example of using ApplicationState directly
 
-This example demonstrates how to use ApplicationState with an
-XMPPStream directly.  Normally the higher-level Application/Plugin
-abstraction is used.  The server waits for a <ping> from the client
-and responds with a pong.  This is done until the client closes the
-stream.
+This example demonstrates direct use of ApplicationState and
+XMPPStream.  Normally the higher-level Application/Plugin abstraction
+is used.  The server waits for a <ping> from the client and responds
+with a pong.  This is done until the client closes the stream.
 """
 
 import functools, xmpp

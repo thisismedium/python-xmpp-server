@@ -7,6 +7,23 @@ The example demonstrates how to write a basic Plugin (PingPong) that
 can be combined with other plugins (Client or Server) to create an
 Application.
 
+A Plugin handles incoming stanzas, manages state, triggers Events that
+can be subscribed to by other Plugins, and probably writes stanzas in
+reply.  There can only be one handler for each stanza in an
+Application, but many listeners for each Event.
+
+A good way to design a Plugin is to:
+
+  1. Watch for stanzas
+
+  2. When a stanza arrives, update state and trigger an Event.
+
+  3. When the Event has been handled, check for changes listeners
+     might have made to the state and act accordingly.
+
+  4. Provide methods for creating stanzas and writing them to the
+     stream.
+
 There's also an example of a fake "stream" that simply passes data
 between Application instances.  This can be used to test Application
 interaction without using sockets.
