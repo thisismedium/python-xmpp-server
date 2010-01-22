@@ -4,7 +4,7 @@
 """xmppstream -- SAX Stream handlers that generate XMPP events"""
 
 from __future__ import absolute_import
-import abc, re, collections
+import abc, re, collections, functools
 from lxml import etree, builder
 
 __all__ = (
@@ -66,6 +66,9 @@ class ApplicationState(object):
         self.activated = False
         self.plugins = plugins or NoPlugins()
 
+        self.eventQ = collections.deque()
+        self.handlingEvent = False
+
         self.setup()
 
     def setup(self):
@@ -81,12 +84,6 @@ class ApplicationState(object):
 
     def hasStanza(self, name):
         return name in self.stanzas
-
-    def handleStanza(self, name, elem):
-        handler = self.stanzas.get(name)
-        if not handler:
-            raise XMPPError('Unrecognized stanza %r.' % name)
-        return handler(elem)
 
     ## ---------- Stream ----------
 
@@ -112,6 +109,35 @@ class ApplicationState(object):
 
     ## ---------- Events ----------
 
+    def handleStanza(self, name, elem):
+        handler = self.stanzas.get(name)
+        if not handler:
+            raise XMPPError('Unrecognized stanza %r.' % name)
+        return self.handleEvent(functools.partial(handler, elem))
+
+    def trigger(self, event, *args, **kwargs):
+        handlers = self.events.get(event)
+        if handlers:
+            for (index, handler) in enumerate(handlers):
+                if isinstance(handler, Once):
+                    del handlers[index]
+                self.handleEvent(functools.partial(handler, *args, **kwargs))
+        return self
+
+    def handleEvent(self, callback):
+        if self.handlingEvent:
+            self.eventQ.append(callback)
+            return self
+
+        try:
+            self.handlingEvent = True
+            callback()
+            while self.eventQ:
+                callback = self.eventQ.popleft()
+                callback()
+        finally:
+            self.handlingEvent = False
+
     def stanza(self, name, callback):
         exists = self.stanzas.get(name)
         if exists:
@@ -136,15 +162,6 @@ class ApplicationState(object):
                 self.events[kind].remove(callback)
             except ValueError:
                 pass
-        return self
-
-    def trigger(self, event, *args, **kwargs):
-        handlers = self.events.get(event)
-        if handlers:
-            for (index, handler) in enumerate(handlers):
-                handler(*args, **kwargs)
-                if isinstance(handler, Once):
-                    del handlers[index]
         return self
 
 class PluginManager(object):
