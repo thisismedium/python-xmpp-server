@@ -434,5 +434,6 @@ def tostring_hack(root, stanza, encoding='utf-8'):
     root.clear()
 
     ## Yikes!
+    ## <stream ...><foo/></stream> ==> <foo/>
     return stream[stream.index('<', 1):stream.rindex('<')]
 
