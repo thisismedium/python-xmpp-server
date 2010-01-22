@@ -85,12 +85,16 @@ class XMLStream(object):
         self._state = io_loop.ERROR | io_loop.READ
         self._wb = u''
 
-        self._parser = XMLParser(ContentHandler(self))
+        self._handler = ContentHandler(self)
+        self._parser = XMLParser(self._handler)
+        self._handler._connectionOpen()
 
         self.io_loop.add_handler(socket.fileno(), self._handle, self._state)
 
     def close(self):
         if self.socket:
+            self._handler._connectionClosed()
+
             try:
                 self._parser.close()
             except:
@@ -98,9 +102,11 @@ class XMLStream(object):
                     'XMLStream: caught exception while closing parser.',
                     exc_info=True
                 )
+
             self.io_loop.remove_handler(self.socket.fileno())
             self.socket.close()
             self.socket = None
+
         return self
 
     def reset(self):
