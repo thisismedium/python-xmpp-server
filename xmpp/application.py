@@ -200,11 +200,7 @@ class PluginError(Exception):
 class PluginType(type):
 
     def __new__(mcls, name, bases, attr):
-        try:
-            ns = attr['__xmlns__']
-        except KeyError:
-            ns = next(pluck('__xmlns__', bases), None)
-
+        ns = get_attribute(bases, attr, '__xmlns__', None)
         nsmap = updated_nsmap(bases, attr)
         handlers = scan_attr(attr, ns, nsmap)
         cls = type.__new__(mcls, name, bases, attr)
@@ -225,7 +221,7 @@ class PluginType(type):
         return obj
 
 def updated_nsmap(bases, attr):
-    base = merge_dicts(pluck('__nsmap__', bases))
+    base = merge_dicts(pluckattr(bases, '__nsmap__'))
     return add_dicts(base, attr.get('__nsmap__'))
 
 def register_handlers(cls, nsmap, events, stanzas):
@@ -248,16 +244,11 @@ def register(cls, property_name, merge, add, scanned=None):
     """Merge base methods with newly declared methods and record them
     in a special property."""
 
-    base = merge(pluck(property_name, cls.__bases__))
+    base = merge(pluckattr(cls.__bases__, property_name))
     if scanned is None:
         scanned = getattr(cls, property_name, None)
     setattr(cls, property_name, add(base, scanned))
     return cls
-
-def pluck(attr, seq):
-    """Pluck the value of attr out of a sequence of objects."""
-
-    return (getattr(x, attr) for x in seq if hasattr(x, attr))
 
 def scan_attr(attr, ns, nsmap):
     """Find and unbox all of the statically delcared stanza and event
@@ -319,6 +310,25 @@ def add_dicts(base, new):
     if new:
         base.update(new)
     return base
+
+def get_attribute(bases, attr, name, *default):
+    """Get the best attribute from a set of bases and newly declared
+    attribtues."""
+
+    try:
+        return attr[name]
+    except KeyError:
+        try:
+            return next(pluckattr(bases, name))
+        except StopIteration:
+            if not default:
+                raise AttributeError(name)
+            return default
+
+def pluckattr(seq, attr):
+    """Pluck the value of attr out of a sequence of objects."""
+
+    return (getattr(x, attr) for x in seq if hasattr(x, attr))
 
 
 ### Compiled Plugins
@@ -443,7 +453,7 @@ def thunk(proc, *args, **kwargs):
 def merge_nsmaps(plugins):
     """Merge namespace maps for a sequence of plugins together."""
 
-    return merge_dicts(pluck('__nsmap__', plugins))
+    return merge_dicts(pluckattr(plugins, '__nsmap__'))
 
 
 ### Plugin Base Class
