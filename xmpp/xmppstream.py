@@ -277,7 +277,7 @@ class XMPPStream(object):
             raise XMPPError('Cannot write to closed stream.')
 
         if isinstance(data, etree._Element):
-            data = etree.tostring(data, encoding='utf-8')
+            data = tostring_hack(self._root, data)
         self._stream.write(data)
 
     def _trigger(self, *args, **kwargs):
@@ -407,3 +407,32 @@ class XMPPStream(object):
 
     def close(self):
         """The parser has closed successfully."""
+
+def tostring_hack(root, stanza, encoding='utf-8'):
+
+    ## This hack is here because lxml serializes whole nodes at a
+    ## time.  When it does this, the root node has lots of xmlns
+    ## declarations (all normal so far).  Whole-node serialization is
+    ## great because it ensures, but XMPP stanzas are in the context
+    ## of a <stream:stream> element that's never closed.
+
+    ## Since individual stanzas are technically SubElements of the
+    ## stream, they should not need the namespace declarations that
+    ## have been declared on the stream element.  But, stanzas are
+    ## serialized as self-contained trees since the <stream:stream>
+    ## element is perpetually open.  The lxml tostring() method adds
+    ## the stream-level namespace declarations to each stanza.  While
+    ## this causes no harm, it is alot of repeated noise and wasted
+    ## space.
+
+    ## Workaround by temporarily adding stanza to root before
+    ## serializing it.  There's no need to hack the parser since it's
+    ## always in the context of a stream.
+
+    root.append(stanza)
+    stream = etree.tostring(root, encoding=encoding)
+    root.clear()
+
+    ## Yikes!
+    return stream[stream.index('<', 1):stream.rindex('<')]
+
