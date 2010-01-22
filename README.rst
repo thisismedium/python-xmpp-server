@@ -6,19 +6,12 @@ An XMPP Server written in Python.  Examples are available here_.
 
 .. _here: http://github.com/thisismedium/python-xmpp-server/tree/master/examples/
 
-Installation
-------------
-
-The XMPP server is using on tornado_ and lxml_.  Before you can
-install it, make sure you have these prerequisites installed.
-
-.. _tornado: http://www.tornadoweb.org/
-.. _lxml: http://codespeak.net/lxml/
-
 Prerequisites
 ~~~~~~~~~~~~~
 
-To install the tornado_ and lxml_::
+The XMPP server is using on tornado_ and lxml_.  Before you can
+install it, make sure you have these prerequisites installed.  To
+install the tornado_ and lxml_::
 
   sudo easy_install setuptools pycurl==7.16.2.1 simplejson lxml
   sudo easy_install -f http://www.tornadoweb.org/ tornado
@@ -29,6 +22,9 @@ MacPorts, for example::
 
   sudo port install py26-setuptools py26-curl py26-simplejson py26-lxml
   sudo easy_install -f http://www.tornadoweb.org/ tornado
+
+.. _tornado: http://www.tornadoweb.org/
+.. _lxml: http://codespeak.net/lxml/
 
 Download and Install
 ~~~~~~~~~~~~~~~~~~~~
