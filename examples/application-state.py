@@ -16,7 +16,7 @@ class Pong(xmpp.ApplicationState):
     def setup(self):
         self.pings = self.pongs = 0
 
-        self.stanza('{urn:jabber-client}ping', self.onPing)
+        self.stanza('{jabber:client}ping', self.onPing)
         self.bind(xmpp.ReceivedStreamOpen, self.receivedOpen)
         self.bind(xmpp.ReceivedStreamClose, self.closeStream)
         self.bind(xmpp.ConnectionClose, self.connectionClosed)

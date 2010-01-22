@@ -31,7 +31,7 @@ class ApplicationState(object):
             def setup(self):
                 self.pings = self.pongs = 0
 
-                self.stanza('{urn:jabber-client}ping', self.onPing)
+                self.stanza('{jabber:client}ping', self.onPing)
                 self.bind(xmpp.ReceivedStreamOpen, self.receivedOpen)
                 self.bind(xmpp.ReceivedStreamClose, self.closeStream)
                 self.bind(xmpp.ConnectionClose, self.connectionClosed)
@@ -211,8 +211,9 @@ class ReceivedStreamClose(Event):
 ### XML Utilities
 
 CLARK_NAME = re.compile(r'^{[^}]+}.+$')
+PREFIX_NAME = re.compile(r'^([^:]+):(.+)')
 
-def clark_name(obj, ns=None):
+def clark_name(obj, ns=None, nsmap=None):
     """Convert an object to Clark Notation.
 
     >>> clark_name((u'foo', u'bar'))
@@ -222,13 +223,34 @@ def clark_name(obj, ns=None):
     >>> clark_name(u'bar', u'foo')
     u'{foo}bar'
     >>> clark_name(u'{foo}bar')
-    return u'{foo}bar'
+    u'{foo}bar'
+    >>> clark_name(u'stream:features', nsmap={ 'stream': 'urn:STREAM' })
+    u'{urn:STREAM}features'
     """
+
+    ## If the default namespace isn't given, try to find one in the
+    ## nsmap.
+    if ns is None and nsmap:
+        ns = nsmap.get(None)
+
     if isinstance(obj, basestring):
+        ## If obj is already in the right format, return it.
         probe = CLARK_NAME.match(obj)
         if probe:
             return obj
-        obj = (ns, obj)
+
+        ## Check for prefix notation and resolve in the nsmap.
+        probe = PREFIX_NAME.match(obj)
+        if probe:
+            (prefix, lname) = probe.groups()
+            uri = nsmap and nsmap.get(prefix)
+            if not uri:
+                raise ValueError('Unrecognized prefix %r.' % obj)
+            obj = (uri, lname)
+        ## This is just an unqualified name, use the default namespace.
+        else:
+            obj = (ns, obj)
+
     return u'{%s}%s' % (obj[0] or ns, obj[1]) if (obj[0] or ns) else obj[1]
 
 
@@ -245,7 +267,7 @@ class XMPPStream(object):
     avoid collision with lxml XMLParser target method names.
     """
 
-    __xmlns__ = 'urn:jabber-client'
+    __xmlns__ = 'jabber:client'
 
     VERSION = 1.0
 
@@ -256,13 +278,14 @@ class XMPPStream(object):
 
     STREAM = clark_name((NSMAP['stream'], 'stream'))
 
-    def __init__(self, state, stream):
+    def __init__(self, state, stream, nsmap=None):
         self._new_state = state
         self._stream = stream
+        self._nsmap = nsmap or self.NSMAP
 
         self._E = builder.ElementMaker(
             namespace=self.__xmlns__,
-            nsmap=self.NSMAP
+            nsmap=self._nsmap
         )
 
         self._closed = None
@@ -413,8 +436,9 @@ def tostring_hack(root, stanza, encoding='utf-8'):
     ## This hack is here because lxml serializes whole nodes at a
     ## time.  When it does this, the root node has lots of xmlns
     ## declarations (all normal so far).  Whole-node serialization is
-    ## great because it ensures, but XMPP stanzas are in the context
-    ## of a <stream:stream> element that's never closed.
+    ## great because it ensures the serialized XML is well-formed, but
+    ## XMPP stanzas are in the context of a <stream:stream> element
+    ## that's never closed.
 
     ## Since individual stanzas are technically SubElements of the
     ## stream, they should not need the namespace declarations that

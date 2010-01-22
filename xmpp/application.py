@@ -88,9 +88,10 @@ def Application(plugins):
         xmpp.TCPServer(server).listen('127.0.0.1', 9000)
     """
 
+    nsmap = merge_nsmaps(plugins)
     plugins = CompiledPlugins(plugins)
     state = functools.partial(xmppstream.ApplicationState, plugins=plugins)
-    target = functools.partial(xmppstream.XMPPStream, state)
+    target = functools.partial(xmppstream.XMPPStream, state, nsmap=nsmap)
 
     return xmlstream.XMLHandler(target)
 
@@ -143,10 +144,11 @@ StanzaMethod = collections.namedtuple('StanzaMethod', 'event name method')
 ### Plugin Type
 
 ## The purpose of this metaclass is to manage declarations of event
-## listeners and stanza handlers.  It adds special EVENTS and STANZAS
-## attributes to each Plugin class.  They look like this:
+## listeners and stanza handlers.  It merges __nsmap__ declarations
+## and adds special EVENTS and STANZAS attributes to each Plugin
+## class.  They look like this:
 
-##     EVENTS =  [(EventName, [method-name, ...]), ...]
+##     EVENTS  = [(EventName, [method-name, ...]), ...]
 ##     STANZAS = [('{ns-uri}stanza', (EventName, method-name)), ...]
 
 ## EVENTS is produced by merging together the EVENTS lists in the base
@@ -180,9 +182,9 @@ StanzaMethod = collections.namedtuple('StanzaMethod', 'event name method')
 ## In the example above, the results are:
 ##
 ##     A.EVENTS =  [(Foo, ['gotFoo']), (Bar, ['gotBar'])]
-##     A.STANZAS = [('{urn:jabber-client}baz', (None, 'baz'))]
+##     A.STANZAS = [('{jabber:client}baz', (None, 'baz'))]
 ##     B.EVENTS =  [(Foo, ['onFoo']), (Bar, ['gotBar'])]
-##     B.STANZAS = [('{urn:jabber-client}baz', (None, 'baz'))]
+##     B.STANZAS = [('{jabber:client}baz', (None, 'baz'))]
 ##
 ## Notice that the A.gotBar() event handler was replaced by B.onBar()
 ## even though the method names are different.  This is done to keep
@@ -203,9 +205,10 @@ class PluginType(type):
         except KeyError:
             ns = next(pluck('__xmlns__', bases), None)
 
-        handlers = scan_attr(ns, attr)
+        nsmap = updated_nsmap(bases, attr)
+        handlers = scan_attr(attr, ns, nsmap)
         cls = type.__new__(mcls, name, bases, attr)
-        return register_handlers(cls, *handlers)
+        return register_handlers(cls, nsmap, *handlers)
 
     def __call__(cls, state, *args, **kwargs):
         """Tweak the construction protocol to pass a magic
@@ -221,7 +224,11 @@ class PluginType(type):
 
         return obj
 
-def register_handlers(cls, events, stanzas):
+def updated_nsmap(bases, attr):
+    base = merge_dicts(pluck('__nsmap__', bases))
+    return add_dicts(base, attr.get('__nsmap__'))
+
+def register_handlers(cls, nsmap, events, stanzas):
     """Register all special handlers in a plugin."""
 
     ## Sanity check
@@ -231,16 +238,19 @@ def register_handlers(cls, events, stanzas):
         if dup:
             raise PluginError('Stanza handler duplicated as event handler.', dup)
 
-    register(cls, 'EVENTS', events, merge_events, add_events)
-    register(cls, 'STANZAS', stanzas, merge_stanzas, add_stanzas)
+    register(cls, 'EVENTS', merge_events, add_events, events)
+    register(cls, 'STANZAS', merge_dicts, add_dicts, stanzas)
+    cls.__nsmap__ = nsmap
 
     return cls
 
-def register(cls, property_name, scanned, merge, add):
+def register(cls, property_name, merge, add, scanned=None):
     """Merge base methods with newly declared methods and record them
     in a special property."""
 
     base = merge(pluck(property_name, cls.__bases__))
+    if scanned is None:
+        scanned = getattr(cls, property_name, None)
     setattr(cls, property_name, add(base, scanned))
     return cls
 
@@ -249,7 +259,7 @@ def pluck(attr, seq):
 
     return (getattr(x, attr) for x in seq if hasattr(x, attr))
 
-def scan_attr(ns, attr):
+def scan_attr(attr, ns, nsmap):
     """Find and unbox all of the statically delcared stanza and event
     bindings."""
 
@@ -261,7 +271,7 @@ def scan_attr(ns, attr):
             attr[name] = obj.method
         elif isinstance(obj, StanzaMethod):
             ## stanza record: (name, (activation-event, method-name))
-            cname = xmppstream.clark_name(obj.name or name, ns)
+            cname = xmppstream.clark_name(obj.name or name, ns, nsmap)
             stanzas.append((cname, (obj.event, name)))
             attr[name] = obj.method
     return (events, stanzas)
@@ -294,20 +304,20 @@ def add_events(base, new):
                 callbacks.append(callback)
     return base
 
-def merge_stanzas(groups):
-    """Merge a sequence of stanza groups together into once sequence.
-    There can only be one stanza handler for each stanza.  The first
-    handler wins."""
+def merge_dicts(groups):
+    """Merge a sequence of dicts together into once dict.  The first
+    item wins."""
 
     if not isinstance(groups, list):
         groups = list(groups)
     return dict(x for g in reversed(groups) for x in g.iteritems())
 
-def add_stanzas(base, new):
-    """Add newly declared stanza handlers to a base set.  New handlers
-    replace existing ones."""
+def add_dicts(base, new):
+    """Add newly dict items to a base set.  New items replace existing
+    ones."""
 
-    base.update(new)
+    if new:
+        base.update(new)
     return base
 
 
@@ -430,6 +440,14 @@ def thunk(proc, *args, **kwargs):
 
     return lambda *a, **k: proc(*args, **kwargs)
 
+def merge_nsmaps(plugins):
+    """Merge namespace maps for a sequence of plugins together."""
+
+    return merge_dicts(pluck('__nsmap__', plugins))
+
+
+### Plugin Base Class
+
 class Plugin(object):
     """The Plugin base class.  All Plugins should subclass this."""
 
@@ -440,7 +458,13 @@ class Plugin(object):
     __activate__ = None
 
     ## The default xmlns for stanza handlers.
-    __xmlns__ = 'urn:jabber-client'
+    __xmlns__ = 'jabber:client'
+
+    ## Add entries to the namespace map
+    __nsmap__ = {
+        None: __xmlns__,
+        'stream': 'http://etherx.jabber.org/streams'
+    }
 
     def __new__(cls, state, *args, **kwargs):
         """Record a special state attribute that's used internally in
