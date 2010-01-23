@@ -4,7 +4,7 @@
 """xmppstream -- SAX Stream handlers that generate XMPP events"""
 
 from __future__ import absolute_import
-import abc, re, collections, functools
+import abc, re, collections, functools, contextlib
 from lxml import etree, builder
 
 __all__ = (
@@ -66,8 +66,8 @@ class ApplicationState(object):
         self.activated = False
         self.plugins = plugins or NoPlugins()
 
-        self.eventQ = collections.deque()
-        self.handlingEvent = False
+        self.schedule = collections.deque()
+        self.locked = False
 
         self.setup()
 
@@ -85,27 +85,92 @@ class ApplicationState(object):
     def hasStanza(self, name):
         return name in self.stanzas
 
+    ## ---------- Syncronization ----------
+
+    ## Plugins are activated on-demand.  When they are activated, they
+    ## may produce side-effects in the state that need to be handled
+    ## by plugins that are activated at the "same time".  To avoid
+    ## race conditions, syncronize triggered Events and writes to the
+    ## stream through a schedule.
+
+    ## Maybe this complication isn't worth it?  Without this, the
+    ## Plugins would need to be very coordinated with how they
+    ## side-effect state.
+
+    @contextlib.contextmanager
+    def lock(self):
+        """A re-entrant lock on triggering events and writing to the
+        stream.  This is useful for coordinating activity across many
+        plugins.  When the lock is release, pending jobs are run."""
+
+        orig = self.locked
+        try:
+            self.locked = True
+            yield
+        finally:
+            self.locked = orig
+            if not orig:
+                self.schedule and self.flush()
+
+    def run(self, method, *args, **kwargs):
+        """Run or schedule a job; if delayed, it will be run later
+        through flush()."""
+
+        if self.locked:
+            self.schedule.append(functools.partial(method, *args, **kwargs))
+            return self
+
+        with self.lock():
+            method(*args, **kwargs)
+        return self
+
+    def flush(self):
+        """Try to flush any scheduled jobs."""
+
+        if self.locked or not self.schedule:
+            return self
+
+        try:
+            self.locked = True
+            while self.schedule:
+                self.schedule.popleft()()
+            return self
+        finally:
+            self.locked = False
+
     ## ---------- Stream ----------
 
+    def writer(method):
+        @functools.wraps(method)
+        def queue_write(self, *args, **kwargs):
+            if self.locked:
+                self.run(method, self, *args, **kwargs)
+            else:
+                method(self, *args, **kwargs)
+            return self
+        return queue_write
+
+    @writer
     def write(self, data):
         self.stream._write(data)
-        return self
 
+    @writer
     def openStream(self, attrs):
         self.stream._openStream(attrs)
-        return self
 
-    def resetStream(self, open_attrs=None):
-        self.stream._resetStream(open_attrs)
-        return self
+    @writer
+    def resetStream(self, attrs=None):
+        self.stream._resetStream(attrs)
 
+    @writer
     def closeStream(self):
         self.stream._closeStream()
-        return self
 
+    @writer
     def closeConnection(self):
         self.stream._close()
-        return self
+
+    del writer
 
     ## ---------- Events ----------
 
@@ -113,7 +178,7 @@ class ApplicationState(object):
         handler = self.stanzas.get(name)
         if not handler:
             raise XMPPError('Unrecognized stanza %r.' % name)
-        return self.handleEvent(functools.partial(handler, elem))
+        return self.run(handler, elem)
 
     def trigger(self, event, *args, **kwargs):
         handlers = self.events.get(event)
@@ -121,22 +186,8 @@ class ApplicationState(object):
             for (index, handler) in enumerate(handlers):
                 if isinstance(handler, Once):
                     del handlers[index]
-                self.handleEvent(functools.partial(handler, *args, **kwargs))
+                self.run(handler, *args, **kwargs)
         return self
-
-    def handleEvent(self, callback):
-        if self.handlingEvent:
-            self.eventQ.append(callback)
-            return self
-
-        try:
-            self.handlingEvent = True
-            callback()
-            while self.eventQ:
-                callback = self.eventQ.popleft()
-                callback()
-        finally:
-            self.handlingEvent = False
 
     def stanza(self, name, callback):
         exists = self.stanzas.get(name)
@@ -163,6 +214,8 @@ class ApplicationState(object):
             except ValueError:
                 pass
         return self
+
+    ## ---------- Private ----------
 
 class PluginManager(object):
     __metaclass__ = abc.ABCMeta
@@ -197,9 +250,8 @@ class Event(object):
     describe the event and how it should be used."""
 
 class ConnectionOpen(Event):
-    """This is triggered once per connection.  Subscribe to this to
-    implement connection-level initialization.  Use this for setting
-    up connection-level state.  Use StreamReset for initializing
+    """This is triggered once per connection.  Use this for setting up
+    connection-level state.  Use StreamReset for initializing
     application-level state."""
 
 class ConnectionClose(Event):
@@ -275,6 +327,12 @@ def clark_name(obj, ns=None, nsmap=None):
 
 class XMPPError(Exception): pass
 
+class ConnectionState(object):
+    """Stream level state may be kept here.  Most of the time
+    ApplicationState or Plugins are better because they are reset when
+    the stream is reset.  It's mostly useful for the implementation of
+    XMPP Core."""
+
 class XMPPStream(object):
     """An lxml XMLParser Target that processes an XMPP stream.  It's
     best to interact with an XMPPStream through a Plugin.
@@ -286,20 +344,20 @@ class XMPPStream(object):
 
     __xmlns__ = 'jabber:client'
 
-    VERSION = 1.0
-
     NSMAP = {
         None: __xmlns__,
         'stream': 'http://etherx.jabber.org/streams'
     }
 
     STREAM = clark_name((NSMAP['stream'], 'stream'))
+    LANG = '{http://www.w3.org/XML/1998/namespace}lang'
 
     def __init__(self, state, stream, nsmap=None):
         self._new_state = state
         self._stream = stream
         self._nsmap = nsmap or self.NSMAP
 
+        self._connectionState = ConnectionState()
         self._E = builder.ElementMaker(
             namespace=self.__xmlns__,
             nsmap=self._nsmap
@@ -311,6 +369,7 @@ class XMPPStream(object):
         self._state = self._new_state(self)
         self._peer = []   # Stack of elements received from the peer.
         self._root = None # Stream element sent to peer.
+        return self
 
     def _write(self, data):
         if self._closed:
@@ -319,25 +378,32 @@ class XMPPStream(object):
         if isinstance(data, etree._Element):
             data = tostring_hack(self._root, data)
         self._stream.write(data)
+        return self
 
     def _trigger(self, *args, **kwargs):
         self._state.trigger(*args, **kwargs)
+        return self
 
     def _stanza(self, *args, **kwargs):
         self._state.handleStanza(*args, **kwargs)
+        return self
 
     def _openStream(self, attrs):
         if self._root:
             raise XMPPError('Stream already open.')
 
-        attrs['version'] = unicode(self.VERSION)
+        ## Special-case 'xml:lang', because it's annoying to write out
+        ## the whole thing in client code.
+        if 'xml:lang' in attrs:
+            attrs[self.LANG] = attrs.pop('xml:lang')
+
         self._root = self._E(self.STREAM, attrs)
 
         ## FIXME: hack; replace with an lxml api call to
         ## generate an opening tag if there is one.
         ##   <stream:stream ... /> ==> <stream:stream ...>
         self._write(etree.tostring(self._root).replace('/>', '>'))
-        return self._trigger(SentStreamOpen)
+        return self._trigger(SentStreamOpen, self._root)
 
     def _resetStream(self, attrs=None):
         """Reset the stream.  This will destroy the current state and
@@ -348,6 +414,7 @@ class XMPPStream(object):
         self._trigger(StreamReset)
         if attrs is not None:
             self._openStream(attrs)
+        return self
 
     def _closeStream(self):
         if self._root is not None:
@@ -378,9 +445,7 @@ class XMPPStream(object):
             raise XMPPError('This stream is already open.')
 
         self._closed = False
-        self._setup()
-        self._trigger(ConnectionOpen)
-        self._trigger(StreamReset)
+        self._setup()._trigger(ConnectionOpen)._trigger(StreamReset)
         return self
 
     def _connectionClosed(self):
@@ -403,12 +468,13 @@ class XMPPStream(object):
 
         if self._peer:
             if len(self._peer) == 1 and not self._state.hasStanza(name):
-                raise XMPPError('Unrecognized stanza', name)
+                raise XMPPError('Unrecognized stanza %r.' % name)
             parent = self._peer[-1]
             self._peer.append(etree.SubElement(parent, name, attrs, nsmap))
         elif name == self.STREAM:
-            self._peer.append(etree.Element(name, attrs, nsmap))
-            self._trigger(ReceivedStreamOpen)
+            elem = etree.Element(name, attrs, nsmap)
+            self._peer.append(elem)
+            self._trigger(ReceivedStreamOpen, elem)
         else:
             raise XMPPError('Expected %r, not %r.' % (self.STREAM, name))
 

@@ -371,6 +371,29 @@ class CompiledPlugins(xmppstream.PluginManager):
 
         return value
 
+    def install(self, state):
+        """Bind "special" plugins to their activation events."""
+
+        for (event, group) in self.special.iteritems():
+            state.one(event, thunk(self.activateGroup, state, group))
+        return self
+
+    def activateDefault(self, state):
+        """Activate the default plugins.  This must be done
+        explicitly.  See Plugin.activatePlugins()."""
+
+        return self.activateGroup(state, self.default)
+
+    def activateGroup(self, state, group):
+        """Activate a group of plugins simultaneously.  The
+        state.lock() ensures that plugin initializers cannot produce
+        side-effects that break other plugins."""
+
+        with state.lock():
+            for (name, plugin) in group:
+                self.activate(state, name, plugin)
+        return self
+
     def activate(self, state, name, plugin):
         """Activate a plugin; see Plugin.plugin()."""
 
@@ -391,21 +414,6 @@ class CompiledPlugins(xmppstream.PluginManager):
             for method in listeners:
                 state.bind(event, getattr(instance, method))
 
-        return self
-
-    def install(self, state):
-        """Bind "special" plugins to their activation events."""
-
-        for (event, name, plugin) in self.special:
-            state.one(event, thunk(self.activate, state, name, plugin))
-        return self
-
-    def activateDefault(self, state):
-        """Activate the default plugins.  This must be done
-        explicitly.  See Plugin.activatePlugins()."""
-
-        for (name, plugin) in self.default:
-            self.activate(state, name, plugin)
         return self
 
 def plugin_taxonomy(plugins):
@@ -435,11 +443,11 @@ def plugin_stanzas(plugins):
     return stanzas
 
 def partition_by_activation(plugins):
-    special = []; default = []
+    special = collections.defaultdict(list); default = []
     for plugin in plugins:
         event = plugin.__activate__
         if event:
-            special.append((event, plugin_name(plugin), plugin))
+            special[event].append((plugin_name(plugin), plugin))
         else:
             default.append((plugin_name(plugin), plugin))
     return (special, default)
@@ -484,6 +492,8 @@ class Plugin(object):
         self.__state = state
         self.__stream = state.stream
         self.__plugins = state.plugins
+
+        self.connection = state.stream._connectionState
         self.E = state.E
 
         return self
@@ -494,30 +504,31 @@ class Plugin(object):
         return self.__plugins.get(self.__state, cls)
 
     def activatePlugins(self):
-        return self.__state.activate()
+        self.__state.activate()
+        return self
 
     ## ---------- Stream ----------
 
     def write(self, data):
-        self.__stream._write(data)
+        self.__state.write(data)
         return self
 
     def openStream(self, attrs):
-        self.__stream._openStream(attrs)
+        self.__state.openStream(attrs)
         return self
 
     def resetStream(self):
-        self.__stream._resetStream()
+        self.__state.resetStream()
         ## Resetting a stream destroys this plugin.
         return None
 
     def closeStream(self):
-        self.__stream._closeStream()
+        self.__state.closeStream()
         ## Closing a stream destroys this plugin.
         return None
 
     def closeConnection(self):
-        self.__stream._close()
+        self.__state.closeConnection()
         return None
 
     ## ---------- Events ----------
