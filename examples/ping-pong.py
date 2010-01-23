@@ -50,14 +50,14 @@ class PingPong(xmpp.Plugin):
     def ping(self, elem):
         self.trigger(ReceivedPing)
         if self.stopped:
-            return self.closeStream()
+            return self.closeConnection()
         return self.sendPong()
 
     @xmpp.stanza
     def pong(self, elem):
         self.trigger(ReceivedPong)
         if self.stopped:
-            return self.closeStream()
+            return self.closeConnection()
         return self.sendPing()
 
     def sendPing(self):
@@ -76,11 +76,14 @@ class Client(xmpp.Plugin):
 
     def __init__(self):
         self.pongs = 0
-        self.activatePlugins()
-        self.openStream({ 'from': 'client@example.net' })
+        self.openStream({
+            'to': 'somebody@example.net',
+            'xml:lang': 'en',
+            'version': '1.0'
+        })
 
     @xmpp.bind(xmpp.ReceivedStreamOpen)
-    def onStart(self):
+    def onStart(self, elem):
         self.plugin(PingPong).sendPing()
 
     @xmpp.bind(ReceivedPong)
@@ -88,21 +91,6 @@ class Client(xmpp.Plugin):
         self.pongs += 1
         if self.pongs > self.PONG_LIMIT:
             pingpong.stop()
-
-    @xmpp.bind(xmpp.ReceivedStreamClose)
-    def onClose(self):
-        self.closeConnection()
-
-@xmpp.bind(xmpp.ReceivedStreamOpen)
-class Server(xmpp.Plugin):
-
-    def __init__(self):
-        self.activatePlugins()
-        self.openStream({ 'from': 'server@example.com' })
-
-    @xmpp.bind(xmpp.ReceivedStreamClose)
-    def onClose(self):
-        self.closeConnection()
 
 
 ### Fake Stream
@@ -137,8 +125,8 @@ class Stream(object):
         print '%s: CLOSED' % self.name
 
 if __name__ == '__main__':
-    server = xmpp.Application([Server, PingPong])
-    client = xmpp.Application([Client, PingPong])
+    server = xmpp.Application([PingPong, xmpp.Core])
+    client = xmpp.Application([Client, PingPong, xmpp.Core])
 
     SP = Stream('S', server, lambda d: CP.read(d))
     CP = Stream('C', client, lambda d: SP.read(d))

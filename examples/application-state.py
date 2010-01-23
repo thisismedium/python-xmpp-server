@@ -22,11 +22,10 @@ class Pong(xmpp.ApplicationState):
         self.bind(xmpp.ConnectionClose, self.connectionClosed)
 
         print 'Waiting for some pings...'
-
         return self
 
-    def receivedOpen(self):
-        self.stream._openStream({ 'from': 'server@example.com' })
+    def receivedOpen(self, elem):
+        self.openStream({ 'from': 'server@example.com' })
 
     def onPing(self, elem):
         self.pings += 1

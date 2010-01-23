@@ -3,3 +3,4 @@ from .tcpserver import *
 from .xmlstream import *
 from .xmppstream import *
 from .application import *
+from .core import *
