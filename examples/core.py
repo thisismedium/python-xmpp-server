@@ -9,7 +9,7 @@ is used.  The server waits for a <ping> from the client and responds
 with a pong.  This is done until the client closes the stream.
 """
 
-import functools, xmpp
+import xmpp
 
 class Pong(xmpp.CoreInterface):
 

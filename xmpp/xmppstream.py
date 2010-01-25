@@ -15,29 +15,43 @@ class XMPPError(Exception): pass
 
 class XMPPHandler(object):
     """Wrap a Core/XMPPTarget up in the TCPHandler interface.  Here is
-    an example XML Echo server:
+    an example of a very simple XMPP server that plays ping/pong:
 
-        import sys, xmpp
+        import xmpp
 
-        class Echo(object):
+        class Pong(xmpp.CoreInterface):
 
-            def __init__(self, stream):
-                self._stream = stream
+            def __init__(self, addr, stream):
+                super(Pong, self).__init__(addr, stream)
+                self.pings = 0
+                print 'Waiting for some pings from %s.' % (self.address[0])
 
-            def start(self, name, attrs):
-                self._stream.write('start %s %r\n' % (name, attrs.items()))
+            def is_stanza(self, name):
+                return name == '{jabber:client}ping'
 
-            def endElement(self, name):
-                self._stream.write('end %s\n' % name)
+            def handle_open_stream(self, elem):
+                self.stream.write(
+                    '<stream:stream xmlns="jabber:client"'
+                    ' from="server@example.net" xml:lang="en"'
+                    ' xmlns:stream="http://etherx.jabber.org/streams">'
+                )
 
-            def data(self, data):
-                self._stream.write('data: %r\n' % data)
+            def handle_stanza(self, name, ping):
+                self.pings += 1
+                self.stream.write('<pong/>')
+
+            def handle_close_stream(self):
+                self.stream.write('</stream:stream>', self.close)
 
             def close(self):
-                self._stream.write('goodbye!')
+                print 'Got %d ping(s) from %s.' % (self.pings, self.address[0])
+                self.stream.close()
 
         if __name__ == '__main__':
-            xmpp.TCPServer(xmpp.XMLHandler(Echo)).listen(*sys.argv[1].split(':'))
+            pong = xmpp.XMPPHandler(Pong)
+            server = xmpp.TCPServer(pong).bind('127.0.0.1', 9000)
+            xmpp.start([server])
+
     """
 
     def __init__(self, CoreType, settings={}):
