@@ -40,5 +40,5 @@ class Pong(xmpp.ApplicationState):
 
 if __name__ == '__main__':
     pong = functools.partial(xmpp.XMPPStream, Pong)
-    handler = xmpp.XMLHandler(pong)
-    S = xmpp.TCPServer(handler).listen('127.0.0.1', 9000)
+    server = xmpp.TCPServer(xmpp.XMLHandler(pong)).bind('127.0.0.1', 9000)
+    xmpp.start([server])
