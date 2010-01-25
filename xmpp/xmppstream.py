@@ -29,7 +29,7 @@ class XMPPHandler(object):
             def is_stanza(self, name):
                 return name == '{jabber:client}ping'
 
-            def handle_open_stream(self, elem):
+            def handle_open_stream(self, attrs):
                 self.stream.write(
                     '<stream:stream xmlns="jabber:client"'
                     ' from="server@example.net" xml:lang="en"'
@@ -148,7 +148,7 @@ class XMPPTarget(object):
             ## Got a <stream:stream>.
             elem = etree.Element(name, attrs, nsmap)
             self.stack.append(elem)
-            self.core.handle_open_stream(elem)
+            self.core.handle_open_stream(attrs)
         else:
             raise XMPPError('Expected %r, not %r.' % (self.STREAM, name))
 
