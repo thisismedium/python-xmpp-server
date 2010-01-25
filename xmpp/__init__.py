@@ -1,5 +1,6 @@
 from __future__ import absolute_import
 from .tcp import *
+from .readstream import *
 from .xmlstream import *
 from .xmppstream import *
 from .application import *
