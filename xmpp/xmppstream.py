@@ -1,464 +1,121 @@
-## Copyright (c) 2009, Coptix, Inc.  All rights reserved.
+## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
 ## See the LICENSE file for license terms and warranty disclaimer.
 
-"""xmppstream -- SAX Stream handlers that generate XMPP events"""
+"""xmppstream -- an XMPP stream handler."""
 
 from __future__ import absolute_import
-import abc, re, collections, functools, contextlib
-from lxml import etree, builder
-
-__all__ = (
-    'Event', 'XMPPError', 'ApplicationState', 'XMPPStream',
-    'ConnectionOpen', 'StreamReset', 'ConnectionClose',
-    'SentStreamOpen', 'SentStreamClose',
-    'ReceivedStreamOpen', 'ReceivedStreamClose'
-)
-
-
-### Application State
-
-class ApplicationState(object):
-    """Application state for an XMPP connection is managed here.  This
-    state may be reset over the lifetime of an XMPP connection.
-
-    Here is an example of a ping/pong server that does not use the
-    higher-level state abstractions available in application.py:
-
-        import functools, xmpp
-
-        class Pong(xmpp.ApplicationState):
-
-            def setup(self):
-                self.pings = self.pongs = 0
-
-                self.stanza('{jabber:client}ping', self.onPing)
-                self.bind(xmpp.ReceivedStreamOpen, self.receivedOpen)
-                self.bind(xmpp.ReceivedStreamClose, self.closeStream)
-                self.bind(xmpp.ConnectionClose, self.connectionClosed)
-
-                return self
-
-            def receivedOpen(self):
-                self.stream._openStream({ 'from': 'server@example.com' })
-
-            def onPing(self, elem):
-                self.pings += 1
-                self.write(self.E('pong'))
-                self.pongs += 1
-
-            def connectionClosed(self):
-                print 'Done: got %d pings and send %d pongs.' % (
-                    self.pings,
-                    self.pongs
-                )
-
-        pong = functools.partial(xmpp.XMPPStream, Pong)
-        handler = xmpp.XMLHandler(pong)
-        S = xmpp.TCPServer(handler).listen('127.0.0.1', 9000)
-    """
-
-    def __init__(self, stream, plugins=None):
-        self.stream = stream
-        self.events = collections.defaultdict(list)
-        self.stanzas = {}
-
-        self.E = stream._E
-        self.activated = False
-        self.plugins = plugins or NoPlugins()
-
-        self.schedule = collections.deque()
-        self.locked = False
-
-        self.setup()
-
-    def setup(self):
-        self.plugins.install(self)
-        return self
-
-    def activate(self):
-        if self.activated:
-            raise PluginError('Plugins are already activated.')
-        self.activated = True
-        self.plugins.activateDefault(self)
-        return self
-
-    def hasStanza(self, name):
-        return name in self.stanzas
-
-    ## ---------- Syncronization ----------
-
-    ## Plugins are activated on-demand.  When they are activated, they
-    ## may produce side-effects in the state that need to be handled
-    ## by plugins that are activated at the "same time".  To avoid
-    ## race conditions, syncronize triggered Events and writes to the
-    ## stream through a schedule.
-
-    ## Maybe this complication isn't worth it?  Without this, the
-    ## Plugins would need to be very coordinated with how they
-    ## side-effect state.
-
-    @contextlib.contextmanager
-    def lock(self):
-        """A re-entrant lock on triggering events and writing to the
-        stream.  This is useful for coordinating activity across many
-        plugins.  When the lock is release, pending jobs are run."""
-
-        orig = self.locked
-        try:
-            self.locked = True
-            yield
-        finally:
-            self.locked = orig
-            if not orig:
-                self.schedule and self.flush()
-
-    def run(self, method, *args, **kwargs):
-        """Run or schedule a job; if delayed, it will be run later
-        through flush()."""
-
-        if self.locked:
-            self.schedule.append(functools.partial(method, *args, **kwargs))
-            return self
-
-        with self.lock():
-            method(*args, **kwargs)
-        return self
-
-    def flush(self):
-        """Try to flush any scheduled jobs."""
-
-        if self.locked or not self.schedule:
-            return self
-
-        try:
-            self.locked = True
-            while self.schedule:
-                self.schedule.popleft()()
-            return self
-        finally:
-            self.locked = False
-
-    ## ---------- Stream ----------
-
-    def writer(method):
-        @functools.wraps(method)
-        def queue_write(self, *args, **kwargs):
-            if self.locked:
-                self.run(method, self, *args, **kwargs)
-            else:
-                method(self, *args, **kwargs)
-            return self
-        return queue_write
-
-    @writer
-    def write(self, data):
-        self.stream._write(data)
-
-    @writer
-    def openStream(self, attrs):
-        self.stream._openStream(attrs)
-
-    @writer
-    def resetStream(self, attrs=None):
-        self.stream._resetStream(attrs)
-
-    @writer
-    def closeStream(self):
-        self.stream._closeStream()
-
-    @writer
-    def closeConnection(self):
-        self.stream._close()
-
-    del writer
-
-    ## ---------- Events ----------
-
-    def handleStanza(self, name, elem):
-        handler = self.stanzas.get(name)
-        if not handler:
-            raise XMPPError('Unrecognized stanza %r.' % name)
-        return self.run(handler, elem)
-
-    def trigger(self, event, *args, **kwargs):
-        handlers = self.events.get(event)
-        if handlers:
-            for (index, handler) in enumerate(handlers):
-                if isinstance(handler, Once):
-                    del handlers[index]
-                self.run(handler, *args, **kwargs)
-        return self
-
-    def stanza(self, name, callback):
-        exists = self.stanzas.get(name)
-        if exists:
-            raise PluginError('The %r stanza is handled by %r.' % (
-                name,
-                exists
-            ))
-        self.stanzas[name] = callback
-        return self
-
-    def bind(self, kind, callback):
-        self.events[kind].append(callback)
-        return self
-
-    def one(self, kind, callback):
-        self.bind(kind, Once(callback))
-        return self
-
-    def unbind(self, kind, callback):
-        if kind in self.events:
-            try:
-                self.events[kind].remove(callback)
-            except ValueError:
-                pass
-        return self
-
-    ## ---------- Private ----------
-
-class PluginManager(object):
-    __metaclass__ = abc.ABCMeta
-
-    @abc.abstractmethod
-    def install(self, state):
-        """Install "special" plugins into the current state."""
-
-    @abc.abstractmethod
-    def activateDefault(self, state):
-        """Activate normal plugins."""
-
-class NoPlugins(PluginManager):
-
-    def install(self, state):
-        pass
-
-    def activateDefault(self, state):
-        pass
-
-class Once(collections.namedtuple('once', 'callback')):
-    """An event handler that should only be called once."""
-
-    def __call__(self, *args, **kwargs):
-        return self.callback(*args, **kwargs)
-
-
-### Events
-
-class Event(object):
-    """Subclass this to declare a new Event.  Use the docstring to
-    describe the event and how it should be used."""
-
-class ConnectionOpen(Event):
-    """This is triggered once per connection.  Use this for setting up
-    connection-level state.  Use StreamReset for initializing
-    application-level state."""
-
-class ConnectionClose(Event):
-    """This is triggered when a connection is closed; use this to tear
-    down state."""
-
-class StreamReset(Event):
-    """This is triggered when a stream is reset.  This happens (1)
-    immediately after ConnectionOpen, (2) after TLS negotiation, and
-    (3) after SASL negotiation.  Application state should almost
-    always be initialized on StreamReset."""
-
-class SentStreamOpen(Event):
-    """Triggered when a <stream:stream> element is sent."""
-
-class SentStreamClose(Event):
-    """Triggered when a </stream:stream> is sent."""
-
-class ReceivedStreamOpen(Event):
-    """Triggered when a <stream:stream> element is received."""
-
-class ReceivedStreamClose(Event):
-    """Triggered when a </stream:stream> is received."""
-
-
-### XML Utilities
-
-CLARK_NAME = re.compile(r'^{[^}]+}.+$')
-PREFIX_NAME = re.compile(r'^([^:]+):(.+)')
-
-def clark_name(obj, ns=None, nsmap=None):
-    """Convert an object to Clark Notation.
-
-    >>> clark_name((u'foo', u'bar'))
-    u'{foo}bar'
-    >>> clark_name((None, u'bar'), u'foo')
-    u'{foo}bar'
-    >>> clark_name(u'bar', u'foo')
-    u'{foo}bar'
-    >>> clark_name(u'{foo}bar')
-    u'{foo}bar'
-    >>> clark_name(u'stream:features', nsmap={ 'stream': 'urn:STREAM' })
-    u'{urn:STREAM}features'
-    """
-
-    ## If the default namespace isn't given, try to find one in the
-    ## nsmap.
-    if ns is None and nsmap:
-        ns = nsmap.get(None)
-
-    if isinstance(obj, basestring):
-        ## If obj is already in the right format, return it.
-        probe = CLARK_NAME.match(obj)
-        if probe:
-            return obj
-
-        ## Check for prefix notation and resolve in the nsmap.
-        probe = PREFIX_NAME.match(obj)
-        if probe:
-            (prefix, lname) = probe.groups()
-            uri = nsmap and nsmap.get(prefix)
-            if not uri:
-                raise ValueError('Unrecognized prefix %r.' % obj)
-            obj = (uri, lname)
-        ## This is just an unqualified name, use the default namespace.
-        else:
-            obj = (ns, obj)
-
-    return u'{%s}%s' % (obj[0] or ns, obj[1]) if (obj[0] or ns) else obj[1]
-
-
-### XMPP Streams
+import errno, socket, logging, abc
+from lxml import etree
+from tornado import ioloop
+from . import readstream
+
+__all__ = ('XMPPError', 'XMPPHandler', 'CoreInterface', 'XMLParser', 'XMPPTarget')
 
 class XMPPError(Exception): pass
 
-class ConnectionState(object):
-    """Stream level state may be kept here.  Most of the time
-    ApplicationState or Plugins are better because they are reset when
-    the stream is reset.  It's mostly useful for the implementation of
-    XMPP Core."""
+class XMPPHandler(object):
+    """Wrap a Core/XMPPTarget up in the TCPHandler interface.  Here is
+    an example XML Echo server:
 
-class XMPPStream(object):
-    """An lxml XMLParser Target that processes an XMPP stream.  It's
-    best to interact with an XMPPStream through a Plugin.
+        import sys, xmpp
 
-    Implementation note: most of the methods and attributes declared
-    here begin with an underscore not to flag them as private, but to
-    avoid collision with lxml XMLParser target method names.
+        class Echo(object):
+
+            def __init__(self, stream):
+                self._stream = stream
+
+            def start(self, name, attrs):
+                self._stream.write('start %s %r\n' % (name, attrs.items()))
+
+            def endElement(self, name):
+                self._stream.write('end %s\n' % name)
+
+            def data(self, data):
+                self._stream.write('data: %r\n' % data)
+
+            def close(self):
+                self._stream.write('goodbye!')
+
+        if __name__ == '__main__':
+            xmpp.TCPServer(xmpp.XMLHandler(Echo)).listen(*sys.argv[1].split(':'))
     """
 
-    __xmlns__ = 'jabber:client'
+    def __init__(self, CoreType, settings={}):
+        self.CoreType = CoreType
+        self.settings = settings
 
-    NSMAP = {
-        None: __xmlns__,
-        'stream': 'http://etherx.jabber.org/streams'
-    }
-
-    STREAM = clark_name((NSMAP['stream'], 'stream'))
-    LANG = '{http://www.w3.org/XML/1998/namespace}lang'
-
-    def __init__(self, state, stream, nsmap=None):
-        self._new_state = state
-        self._stream = stream
-        self._nsmap = nsmap or self.NSMAP
-
-        self._connectionState = ConnectionState()
-        self._E = builder.ElementMaker(
-            namespace=self.__xmlns__,
-            nsmap=self._nsmap
-        )
-
-        self._closed = None
-
-    def _setup(self):
-        self._state = self._new_state(self)
-        self._peer = []   # Stack of elements received from the peer.
-        self._root = None # Stream element sent to peer.
+    def __call__(self, socket, addr, io_loop):
+        stream = readstream.ReadStream(socket, io_loop)
+        self.CoreType(addr, stream, **self.settings)
         return self
 
-    def _write(self, data):
-        if self._closed:
-            raise XMPPError('Cannot write to closed stream.')
+class CoreInterface(object):
+    """Abstract interface for an XMPP Core implementation."""
 
-        if isinstance(data, etree._Element):
-            data = tostring_hack(self._root, data)
-        self._stream.write(data)
+    def __init__(self, addr, stream):
+        """The constructor accepts an ReadStream."""
+
+        self.address = addr
+        self.stream = stream
+        self.parser = XMLParser(XMPPTarget(self))
+        stream.read(self.parser.feed)
+
+    @abc.abstractmethod
+    def is_stanza(self, name):
+        """Is name a stanza this XMPP agent can process?"""
+        return False
+
+    @abc.abstractmethod
+    def handle_open_stream(self, elem):
+        """A <stream:stream> opening tag has been received."""
+
+    @abc.abstractmethod
+    def handle_stanza(self, elem):
+        """A stanza has been received."""
+
+    @abc.abstractmethod
+    def handle_close_stream(self):
+        """A </stream:stream> closing tag has been received."""
+
+class XMLParser(etree.XMLParser):
+    """Wrap the lxml XMLParser to require a target and prime the
+    incremental parser to avoid hanging on an opening stream tag."""
+
+    def __init__(self, target, **kwargs):
+        etree.XMLParser.__init__(self, target=target, **kwargs)
+
+        ## Prime the XMLParser.  Without this, if the first chunk
+        ## contains only an opening tag (i.e. <stream:stream ...>),
+        ## the ContentHandler events will not be triggered until the
+        ## next chunk arrives.
+        self.feed('')
+
+    def reset(self):
+        self.close()
+        self.feed('') # Prime the XMLParser
         return self
 
-    def _trigger(self, *args, **kwargs):
-        self._state.trigger(*args, **kwargs)
+    def close(self):
+        try:
+            etree.XMLParser.close(self)
+        except etree.XMLSyntaxError:
+            ## This exception can be thrown if the parser is
+            ## closed before all open xml elements are closed.
+            ## Ignore this since it's common with </stream:stream>
+            pass
         return self
 
-    def _stanza(self, *args, **kwargs):
-        self._state.handleStanza(*args, **kwargs)
-        return self
+class XMPPTarget(object):
+    """An lxml XMLParser Target that processes an XMPP stream."""
 
-    def _openStream(self, attrs):
-        if self._root:
-            raise XMPPError('Stream already open.')
+    STREAM = '{http://etherx.jabber.org/streams}stream'
 
-        ## Special-case 'xml:lang', because it's annoying to write out
-        ## the whole thing in client code.
-        if 'xml:lang' in attrs:
-            attrs[self.LANG] = attrs.pop('xml:lang')
+    def __init__(self, core):
+        self.core = core
+        self.reset()
 
-        self._root = self._E(self.STREAM, attrs)
-
-        ## FIXME: hack; replace with an lxml api call to
-        ## generate an opening tag if there is one.
-        ##   <stream:stream ... /> ==> <stream:stream ...>
-        self._write(etree.tostring(self._root).replace('/>', '>'))
-        return self._trigger(SentStreamOpen, self._root)
-
-    def _resetStream(self, attrs=None):
-        """Reset the stream.  This will destroy the current state and
-        may be called any time."""
-
-        self._stream.reset()
-        self._setup()
-        self._trigger(StreamReset)
-        if attrs is not None:
-            self._openStream(attrs)
-        return self
-
-    def _closeStream(self):
-        if self._root is not None:
-            self._root = None
-            ## FIXME: hack; replace this with an lxml api call to
-            ## generate a closing tag if there is one.
-            self._write('</stream:stream>')
-            self._trigger(SentStreamClose)
-        return self
-
-    def _close(self):
-        """Close the connection.  This can only be called once."""
-
-        if not self._closed:
-            ## This will callback to _connectionClosed()
-            self._stream.close()
-        return self
-
-    ### ---------- Private XMLStream Interface ----------
-
-    def _connectionOpen(self):
-        """This is a private method called by XMLStream.  Don't call
-        this directly."""
-
-        if self._closed:
-            raise XMPPError('This stream has been closed.')
-        elif self._closed is not None:
-            raise XMPPError('This stream is already open.')
-
-        self._closed = False
-        self._setup()._trigger(ConnectionOpen)._trigger(StreamReset)
-        return self
-
-    def _connectionClosed(self):
-        """This is a private method called by XMLStream.  Don't call
-        this directly; use _close()."""
-
-        ## FIXME? What happens if the peer has already closed the
-        ## connection?
-        self._closeStream()
-
-        self._closed = True
-        self._trigger(ConnectionClose)
-
+    def reset(self):
+        self.stack = []   # Stack of elements received from the peer.
         return self
 
     ### ---------- Parser Target ----------
@@ -466,42 +123,44 @@ class XMPPStream(object):
     def start(self, name, attrs, nsmap):
         """An element has started; push it onto the stack."""
 
-        if self._peer:
-            if len(self._peer) == 1 and not self._state.hasStanza(name):
+        if self.stack:
+            ## A <stream:stream> has already been received.  This is
+            ## the beginning of a stanza or part of a stanza.
+            if len(self.stack) == 1 and not self.core.is_stanza(name):
                 raise XMPPError('Unrecognized stanza %r.' % name)
-            parent = self._peer[-1]
-            self._peer.append(etree.SubElement(parent, name, attrs, nsmap))
+            parent = self.stack[-1]
+            self.stack.append(etree.SubElement(parent, name, attrs, nsmap))
         elif name == self.STREAM:
+            ## Got a <stream:stream>.
             elem = etree.Element(name, attrs, nsmap)
-            self._peer.append(elem)
-            self._trigger(ReceivedStreamOpen, elem)
+            self.stack.append(elem)
+            self.core.handle_open_stream(elem)
         else:
             raise XMPPError('Expected %r, not %r.' % (self.STREAM, name))
 
     def end(self, name):
-        """When the end of an element is signaled, it is popped off
-        the stack.  If it is the root, tear down the stream.  If it is
-        a child of the root, a stanza handler is notified."""
+        """An element has finished; pop if off the stack.  If it is a
+        </stream:stream> or the end of a stanza, notify the core."""
 
-        if not self._peer:
+        if not self.stack:
             raise XMPPError('Unexpected closing %r.' % name)
 
-        elem = self._peer.pop()
+        elem = self.stack.pop()
         if elem.tag != name:
             raise XMPPError('Expected closing %r, not %r.' % (elem.tag, name))
 
-        if len(self._peer) == 1:
-            self._stanza(name, elem)
+        if len(self.stack) == 1:
+            self.core.handle_stanza(name, elem)
         elif name == self.STREAM:
-            self._trigger(ReceivedStreamClose)
+            self.core.handle_close_stream()
 
     def data(self, data):
         """Character data is appended to the current element."""
 
-        if not self._peer:
+        if not self.stack:
             raise XMPPError('Unexpected character data: %r' % data)
 
-        elem = self._peer[-1]
+        elem = self.stack[-1]
 
         if len(elem) != 0:
             ## Append to the tail of the last child if it exists.
@@ -513,34 +172,3 @@ class XMPPStream(object):
 
     def close(self):
         """The parser has closed successfully."""
-
-def tostring_hack(root, stanza, encoding='utf-8'):
-
-    ## This hack is here because lxml serializes whole nodes at a
-    ## time.  When it does this, the root node has lots of xmlns
-    ## declarations (all normal so far).  Whole-node serialization is
-    ## great because it ensures the serialized XML is well-formed, but
-    ## XMPP stanzas are in the context of a <stream:stream> element
-    ## that's never closed.
-
-    ## Since individual stanzas are technically SubElements of the
-    ## stream, they should not need the namespace declarations that
-    ## have been declared on the stream element.  But, stanzas are
-    ## serialized as self-contained trees since the <stream:stream>
-    ## element is perpetually open.  The lxml tostring() method adds
-    ## the stream-level namespace declarations to each stanza.  While
-    ## this causes no harm, it is alot of repeated noise and wasted
-    ## space.
-
-    ## Workaround by temporarily adding stanza to root before
-    ## serializing it.  There's no need to hack the parser since it's
-    ## always in the context of a stream.
-
-    root.append(stanza)
-    stream = etree.tostring(root, encoding=encoding)
-    root.clear()
-
-    ## Yikes!
-    ## <stream ...><foo/></stream> ==> <foo/>
-    return stream[stream.index('<', 1):stream.rindex('<')]
-

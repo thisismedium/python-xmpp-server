@@ -55,6 +55,7 @@ class ReadStream(object):
         self._reader = None
         self._read_chunk_size = read_chunk_size
         self._wb = u''
+        self._write_callback = None
 
         self.io_loop.add_handler(socket.fileno(), self._handle, self._state)
 
@@ -64,8 +65,9 @@ class ReadStream(object):
         self._add_io_state(self.io_loop.READ)
         return self
 
-    def write(self, data):
+    def write(self, data, callback=None):
         self._wb += data
+        self._write_callback = callback
         self._add_io_state(self.io_loop.WRITE)
         return self
 
@@ -125,6 +127,10 @@ class ReadStream(object):
                 else:
                     self.close()
                     return
+        if not self._wb and self._write_callback:
+            callback = self._write_callback
+            self._write_callback = None
+            callback()
 
     def _add_io_state(self, state):
         if not self._state & state:
