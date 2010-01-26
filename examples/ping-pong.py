@@ -115,8 +115,8 @@ class Stream(object):
         print '%s: CLOSED' % self.name
 
 if __name__ == '__main__':
-    server = xmpp.Application(xmpp.ServerCore, [PingPong])
-    client = xmpp.Application(xmpp.ClientCore, [PingPong, Client])
+    server = xmpp.Server([PingPong])
+    client = xmpp.Client([PingPong, Client])
 
     SP = Stream('S', server, lambda d: CP.reader(d))
     CP = Stream('C', client, lambda d: SP.reader(d))

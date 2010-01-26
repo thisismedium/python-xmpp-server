@@ -5,17 +5,26 @@
 
 from __future__ import absolute_import
 import functools, collections
-from . import xml, interfaces
+from . import xml, interfaces, core
 
-__all__ = ('Application', 'bind', 'stanza', 'Plugin',  'PluginError')
+__all__ = (
+    'Server', 'Client', 'Application',
+    'bind', 'stanza', 'Plugin',  'PluginError'
+)
 
-def Application(Core, plugins=()):
+def Server(*args, **kwargs):
+    return Application(core.ServerCore, *args, **kwargs)
+
+def Client(*args, **kwargs):
+    return Application(core.ClientCore, *args, **kwargs)
+
+def Application(Core, plugins=(), **kwargs):
     """Declare an XMPP Application.  An application is an XMLHandler
     that dispatches to stanza handlers.
     """
 
     plugins = CompiledPlugins(plugins)
-    return functools.partial(Core, plugins=plugins)
+    return functools.partial(Core, plugins=plugins, **kwargs)
 
 
 ### Static plugin decorators
