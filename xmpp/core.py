@@ -1,140 +1,104 @@
-## Copyright (c) 2009, Coptix, Inc.  All rights reserved.
+## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
 ## See the LICENSE file for license terms and warranty disclaimer.
 
 """core -- xmpp core <http://xmpp.org/rfcs/rfc3920.html>"""
 
 from __future__ import absolute_import
-import random, base64, struct, logging
-from . import application as app, xmppstream as xs
+import abc, logging, functools
+from . import interfaces, state, xml, xmppstream
 
-__all__ = ('Core', )
+__all__ = ('ServerCore', 'ClientCore')
 
-@app.bind(xs.StreamReset)
-class Core(app.Plugin):
+class Core(interfaces.CoreInterface):
 
-    VERSION = '1.0'
+    def __init__(self, address, stream, plugins=None):
+        self.peer = address
+        self.stream = stream.read(self._read)
 
-    def __init__(self):
-        ## Special, connection-level state.
-        conn = self.connection
-        if not hasattr(conn, 'initiator'):
-            conn.__initiator = None
-            conn.__secured = False
-            conn.__authenticated = False
+        self.parser = xml.Parser(xmppstream.XMPPTarget(self))
+        self.E = xml.ElementMaker(
+            namespace=plugins.__xmlns__,
+            nsmap=plugins.nsmap
+        )
 
-        ## State
-        self.streamSent = False
+        self.state = state.State(self, plugins)
+        self.reset()
 
-        ## Stream Attributes
-        self.fromJID = None
-        self.toJID = None
-        self.id = None
-        self.lang = None
+    def reset(self):
+        self.parser.reset()
+        self.root = None
+        self.state.reset()
+        self.initiate()
 
-    def isInitiator(self):
-        return self.connection.__initiator is True
+    ### ---------- Incoming Stream ----------
 
-    def isSecured(self):
-        return self.connection.__secured
+    ## These are callbacks for the XMPPStream.
 
-    def isAuthenticated(self):
-        return self.connection.__authenticated
+    def is_stanza(self, name):
+        return self.state.is_stanza(name)
 
-    ## ---------- Stream Setup ----------
+    def handle_open_stream(self, attr):
+        self.state.trigger(ReceivedOpenStream)
 
+    def handle_stanza(self, elem):
+        self.state.trigger_stanza(elem)
+
+    def handle_close_stream(self):
+        self.state.trigger(ReceivedCloseStream)
+        self.close()
+
+    ### ---------- Outgoing Stream ----------
+
+    STREAM = '{http://etherx.jabber.org/streams}stream'
     LANG = '{http://www.w3.org/XML/1998/namespace}lang'
 
-    ## Watch for *StreamOpen events to create the initial stream
-    ## state.  Do a little song-and-dance to determine if this
-    ## participant is the initiator or not.
+    @abc.abstractmethod
+    def make_stream(self):
+        """Create a <stream:stream> element."""
 
-    @app.bind(xs.SentStreamOpen)
-    def sentStream(self, elem):
-        if self.connection.__initiator is None:
-            self.connection.__initiator = True
+    def initiate(self):
+        """Initiate a stream after a reset."""
+        pass
 
-        self.streamSent = True
+    def writer(method):
+        """Push writes through the scheduled jobs queue."""
 
-        if self.connection.__initiator:
-            ## Record local stream attributes; wait for features.
-            self.streamTo(elem)
-        else:
-            self.sendFeatures()
+        @functools.wraps(method)
+        def queue_write(self, *args, **kwargs):
+            self.state.run(method, self, *args, **kwargs)
+            return self
 
-    @app.bind(xs.ReceivedStreamOpen)
-    def receivedStream(self, elem):
-        if self.connection.__initiator is None:
-            self.connection.__initiator = False
+        return queue_write
 
-        if self.connection.__initiator:
-            ## Record peer stream attributes; wait for features.
-            self.streamFrom(elem)
-        else:
-            ## Send an opening stream in reply.
-            self.streamReply(elem)
+    @writer
+    def write(self, data):
+        if xml.is_element(data):
+            data = xml.stanza_tostring(self.root, data)
+        self.stream.write(data)
 
-    @app.bind(xs.SentStreamClose)
-    def sentClose(self):
-        self.streamSent = False
+    @writer
+    def open_stream(self):
+        if self.root is None:
+            self.root = self.make_stream()
+            self.stream.write(xml.open_tag(self.root))
 
-    @app.bind(xs.ReceivedStreamClose)
-    def receivedClose(self):
-        self.closeConnection()
+    @writer
+    def close_stream(self):
+        if self.root is not None:
+            self.stream.write(xml.close_tag(self.root))
+            self.root = None
 
-    def streamTo(self, elem):
-        """Record local stream attributes.  Something outside this
-        plugin as initiated the stream."""
+    def close(self):
+        if self.stream:
+            self.close_stream()
+            self.state.run(self._close).flush(True)
 
-        self.assertVersion(elem.get('version'))
-        self.toJID = elem.get('to')
-        self.lang = elem.get(self.LANG)
-        ## FIXME: move this to post-auth
-        self.activatePlugins()
+    ### ---------- Errors ----------
 
-        return self
-
-    def streamFrom(self, elem):
-        """Record peer stream attributes.  The peer has responded to
-        the locally initiated stream."""
-
-        self.assertVersion(elem.get('version'))
-        self.fromJID = elem.get('from')
-        self.id = elem.get('id')
-        self.lang = self.lang or elem.get(self.LANG)
-
-        return self
-
-    def streamReply(self, elem):
-        """The peer has initiated a stream.  Open a stream in reply."""
-
-        self.assertVersion(elem.get('version'))
-        self.toJID = elem.get('to')
-
-        ## FIXME! hard-coded values
-        fromJID = self.fromJID = 'recipient@example.net'
-        sid = self.id = self.makeStreamId()
-        lang = self.lang = elem.get(self.LANG, 'en')
-        self.openStream({
-            'from': fromJID,
-            'id': sid,
-            'xml:lang': 'en',
-            'version': self.VERSION
-        })
-        ## FIXME: move this to post-auth
-        self.activatePlugins()
-
-        return self
-
-    def makeStreamId(self):
-        random.seed()
-        value = random.getrandbits(64)
-        return base64.b64encode(''.join(struct.pack('L', value)))
-
-    ## ---------- Errors ----------
-
+    ERROR = '{http://etherx.jabber.org/streams}error'
     ERROR_NS = 'urn:ietf:params:xml:ns:xmpp-streams'
 
-    def error(self, name, text=None):
+    def error(self, name, text=None, exc=None):
         """Send a stream-level error and close the connection.  Errors
         have this basic format:
 
@@ -148,40 +112,119 @@ class Core(app.Plugin):
         See: <http://xmpp.org/rfcs/rfc3920.html#rfc.section.4.7.3>
         """
 
-        elem = self.E('stream:error', self.E(name, xmlns=self.ERROR_NS))
-        if text is not None:
-            elem.append(self.E.text(
-                { self.LANG: 'en', 'xmlns': self.ERROR_NS},
-                text
-            ))
+        if self.stream is None:
+            logging.error(
+                'Error reported after stream was closed: %s %r' % (name, text),
+                exc_info=bool(exc)
+            )
+            return self
+        elif exc:
+            logging.error('Stream Error: %s' % exc, exc_info=True)
 
         try:
-            if not self.streamSent:
-                ## FIXME: open the stream somehow
-                self.openStream({})
-            self.write(elem)
-            self.closeConnection()
-        except xs.XMPPError:
-            self.streamSent = False
-
-            ## This may happen if the connection is closed before the
-            ## error stanza or stream-close can be written.
-            logging.error(
-                'Core.error: caught exception while sending stream error.',
-                exc_info=True
-            )
+            with self.state.clear().lock():
+                self.open_stream()
+                elem = self.E(self.ERROR, self.E(name, xmlns=self.ERROR_NS))
+                if text is not None:
+                    elem.append(self.E.text(
+                        { self.LANG: 'en', 'xmlns': self.ERROR_NS},
+                        text
+                    ))
+                self.write(elem).close_stream()
+            self._close()
+        except:
+            logging.error('Exception while reporting error.', exc_info=True)
 
         return self
 
-    def assertVersion(self, version):
-        if version != self.VERSION:
-            self.error(
-                'unsupported-version',
-                'Supported versions: %r' % self.version
-            )
-        return self
+    ### ---------- Private ----------
 
-    ## ---------- Features ----------
+    def _close(self):
+        if self.stream:
+            ## This causes a segfault when the stream is closed.
+            ##   self.parser.close()
+            self.state.clear()
+            self.stream.close()
+            self.stream = None
 
-    def sendFeatures(self):
-        pass
+    def _read(self, data):
+        if not self.stream:
+            return
+
+        try:
+            self.parser.feed(data)
+        except xmppstream.XMPPError as exc:
+            self.error(exc.condition, exc.text, exc)
+        except xml.XMLSyntaxError as exc:
+            self.error('bad-format', str(exc), exc)
+        except Exception as exc:
+            self.error('internal-server-error', str(exc), exc)
+
+
+### Events
+
+class ReceivedOpenStream(state.Event):
+    pass
+
+class ReceivedCloseStream(state.Event):
+    pass
+
+
+### Client / Server
+
+class ClientCore(Core):
+
+    ### ---------- Incoming Stream ----------
+
+    def handle_open_stream(self, attr):
+        self.state.trigger(ReceivedOpenStream)
+        self.wait_for_features()
+
+    ### ---------- Outgoing Stream ----------
+
+    def make_stream(self):
+        return self.E(self.STREAM, {
+            'to': 'person@example.net',
+            self.LANG: 'en',
+            'version': '1.0'
+        })
+
+    def initiate(self):
+        self.open_stream()
+
+    ### ---------- Features ----------
+
+    def wait_for_features(self):
+        self.state.activate()
+
+class ServerCore(Core):
+
+    ### ---------- Incoming Stream ----------
+
+    def handle_open_stream(self, attr):
+        self.state.trigger(ReceivedOpenStream)
+        self.open_stream()
+        self.send_features()
+
+    ### ---------- Outgoing Stream ----------
+
+    def make_stream(self):
+        return self.E(self.STREAM, {
+            'from': 'server@example.net',
+            'id': make_nonce(),
+            self.LANG: 'en',
+            'version': '1.0'
+        })
+
+    ### ---------- Features ----------
+
+    def send_features(self):
+        self.state.activate()
+
+def make_nonce():
+    import random, base64, struct
+
+    random.seed()
+    value = random.getrandbits(64)
+    return base64.b64encode(''.join(struct.pack('L', value)))
+

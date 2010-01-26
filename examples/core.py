@@ -1,7 +1,7 @@
 ## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
 ## See the LICENSE file for license terms and warranty disclaimer.
 
-"""core -- an example of using ApplicationState directly
+"""core -- an example CoreInterface implementation
 
 This example demonstrates how to implement a simple XMPP Core
 interface.  Normally the higher-level Application/Plugin abstraction
@@ -14,9 +14,12 @@ import xmpp
 class Pong(xmpp.CoreInterface):
 
     def __init__(self, addr, stream):
-        super(Pong, self).__init__(addr, stream)
+        self.address = addr
+        self.parser = xmpp.xml.Parser(xmpp.XMPPTarget(self))
+        self.stream = stream.read(self.parser.feed)
         self.pings = 0
-        print 'Waiting for some pings from %s.' % (self.address[0])
+
+        print 'Waiting for some pings from %s.' % (addr[0])
 
     def is_stanza(self, name):
         return name == '{jabber:client}ping'
@@ -28,7 +31,7 @@ class Pong(xmpp.CoreInterface):
             ' xmlns:stream="http://etherx.jabber.org/streams">'
         )
 
-    def handle_stanza(self, name, ping):
+    def handle_stanza(self, ping):
         self.pings += 1
         self.stream.write('<pong/>')
 

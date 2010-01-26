@@ -5,95 +5,17 @@
 
 from __future__ import absolute_import
 import functools, collections
-from . import xmlstream, xmppstream
+from . import xml, interfaces
 
 __all__ = ('Application', 'bind', 'stanza', 'Plugin',  'PluginError')
 
-def Application(plugins):
+def Application(Core, plugins=()):
     """Declare an XMPP Application.  An application is an XMLHandler
     that dispatches to stanza handlers.
-
-        import xmpp
-
-        class ReceivedPong(xmpp.Event): pass
-        class ReceivedPing(xmpp.Event): pass
-
-        class PingPong(xmpp.Plugin):
-
-            def __init__(self):
-                self.stopped = False
-
-            def stop(self):
-                self.stopped = True
-                return self
-
-            @xmpp.stanza
-            def ping(self, elem):
-                self.trigger(ReceivedPing)
-                if self.stopped:
-                    return self.closeStream()
-                return self.sendPong()
-
-            @xmpp.stanza
-            def pong(self, elem):
-                self.trigger(ReceivedPong)
-                if self.stopped:
-                    return self.closeStream()
-                return self.sendPing()
-
-            def sendPing(self):
-                return self.write(self.E('ping'))
-
-            def sendPong(self):
-                return self.write(self.E('pong'))
-
-        @xmpp.bind(xmpp.StreamReset)
-        class Client(xmpp.Plugin):
-
-            PONG_LIMIT = 5
-
-            def __init__(self):
-                self.pongs = 0
-                self.activatePlugins()
-                self.openStream({ 'from': 'client@example.net' })
-
-            @xmpp.bind(xmpp.ReceivedStreamOpen)
-            def onStart(self):
-                self.plugin(PingPong).sendPing()
-
-            @xmpp.bind(ReceivedPong)
-            def onPong(self, pingpong):
-                self.pongs += 1
-                if self.pongs > self.PONG_LIMIT:
-                    pingpong.stop()
-
-            @xmpp.bind(xmpp.ReceivedStreamClose)
-            def onClose(self):
-                self.closeConnection()
-
-        @xmpp.bind(xmpp.ReceivedStreamOpen)
-        class Server(xmpp.Plugin):
-
-            def __init__(self):
-                self.activatePlugins()
-                self.openStream({ 'from': 'server@example.com' })
-
-            @xmpp.bind(xmpp.ReceivedStreamClose)
-            def onClose(self):
-                self.closeConnection()
-
-        server = xmpp.Application([Server, PingPong])
-        client = xmpp.Application([Client, PingPong])
-
-        xmpp.TCPServer(server).listen('127.0.0.1', 9000)
     """
 
-    nsmap = merge_nsmaps(plugins)
     plugins = CompiledPlugins(plugins)
-    state = functools.partial(xmppstream.ApplicationState, plugins=plugins)
-    target = functools.partial(xmppstream.XMPPStream, state, nsmap=nsmap)
-
-    return xmlstream.XMLHandler(target)
+    return functools.partial(Core, plugins=plugins)
 
 
 ### Static plugin decorators
@@ -262,7 +184,7 @@ def scan_attr(attr, ns, nsmap):
             attr[name] = obj.method
         elif isinstance(obj, StanzaMethod):
             ## stanza record: (name, (activation-event, method-name))
-            cname = xmppstream.clark_name(obj.name or name, ns, nsmap)
+            cname = xml.clark(obj.name or name, ns, nsmap)
             stanzas.append((cname, (obj.event, name)))
             attr[name] = obj.method
     return (events, stanzas)
@@ -333,12 +255,16 @@ def pluckattr(seq, attr):
 
 ### Compiled Plugins
 
-class CompiledPlugins(xmppstream.PluginManager):
+class CompiledPlugins(interfaces.PluginManager):
     """A list of plugins used in an Application is "compiled" into
     data structures that facilitate run-time plugin use."""
 
     def __init__(self, plugins):
         self.plugins = plugins
+
+        ## This nsmap can be used to create an ElementMaker that is
+        ## aware of the xmlns attributes of the plugins.
+        self.nsmap = merge_nsmaps(plugins)
 
         ## The taxonomy facilitates Plugin.plugin().
         self.taxonomy = plugin_taxonomy(plugins)
@@ -361,7 +287,7 @@ class CompiledPlugins(xmppstream.PluginManager):
         if name is None:
             raise PluginError('Plugin %r is not registered.' % plugin)
 
-        value = getattr(state, name, None)
+        value = state.get(name)
         if value is None:
             active = plugin.__activate__ or 'default-activation'
             raise PluginError('Plugin %r will not be active until %r.' % (
@@ -371,25 +297,25 @@ class CompiledPlugins(xmppstream.PluginManager):
 
         return value
 
-    def install(self, state):
+    def install(self, core):
         """Bind "special" plugins to their activation events."""
 
         for (event, group) in self.special.iteritems():
-            state.one(event, thunk(self.activateGroup, state, group))
+            state.one(event, thunk(self.activate_group, state, group))
         return self
 
-    def activateDefault(self, state):
+    def activate_default(self, state):
         """Activate the default plugins.  This must be done
         explicitly.  See Plugin.activatePlugins()."""
 
-        return self.activateGroup(state, self.default)
+        return self.activate_group(state, self.default)
 
-    def activateGroup(self, state, group):
+    def activate_group(self, state, group):
         """Activate a group of plugins simultaneously.  The
         state.lock() ensures that plugin initializers cannot produce
         side-effects that break other plugins."""
 
-        with state.lock():
+        with state.lock() as state:
             for (name, plugin) in group:
                 self.activate(state, name, plugin)
         return self
@@ -399,15 +325,15 @@ class CompiledPlugins(xmppstream.PluginManager):
 
         ## Create plugin instance; add it to the state
         instance = plugin(state)
-        setattr(state, name, instance)
+        state.set(name, instance)
 
         ## Activate stanza handlers
         for (name, event, method) in self.stanzas[plugin]:
             method = getattr(instance, method)
             if not event:
-                state.stanza(name, method)
+                state.bind_stanza(name, method)
             else:
-                state.bind(event, thunk(state.stanza, name, method))
+                state.bind(event, thunk(state.bind_stanza, name, method))
 
         ## Activate event listeners
         for (event, listeners) in plugin.EVENTS.iteritems():
@@ -490,11 +416,10 @@ class Plugin(object):
 
         self = object.__new__(cls)
         self.__state = state
-        self.__stream = state.stream
+        self.__core = state.core
         self.__plugins = state.plugins
 
-        self.connection = state.stream._connectionState
-        self.E = state.E
+        self.E = self.__core.E
 
         return self
 
@@ -503,38 +428,38 @@ class Plugin(object):
     def plugin(self, cls):
         return self.__plugins.get(self.__state, cls)
 
-    def activatePlugins(self):
+    def activate_plugins(self):
         self.__state.activate()
         return self
 
     ## ---------- Stream ----------
 
     def write(self, data):
-        self.__state.write(data)
+        self.__core.write(data)
         return self
 
-    def openStream(self, attrs):
-        self.__state.openStream(attrs)
+    def open_stream(self):
+        self.__core.open_stream()
         return self
 
-    def resetStream(self):
-        self.__state.resetStream()
+    def reset_stream(self):
+        self.__core.reset()
         ## Resetting a stream destroys this plugin.
         return None
 
-    def closeStream(self):
-        self.__state.closeStream()
+    def close_stream(self):
+        self.__core.close_stream()
         ## Closing a stream destroys this plugin.
         return None
 
-    def closeConnection(self):
-        self.__state.closeConnection()
+    def close(self):
+        self.__core.close()
         return None
 
     ## ---------- Events ----------
 
     def stanza(self, *args, **kwargs):
-        self.__state.stanza(*args, **kwargs)
+        self.__state.bind_stanza(*args, **kwargs)
         return self
 
     def bind(self, *args, **kwargs):

@@ -50,44 +50,32 @@ class PingPong(xmpp.Plugin):
     def ping(self, elem):
         self.trigger(ReceivedPing)
         if self.stopped:
-            return self.closeConnection()
-        return self.sendPong()
+            return self.close_stream()
+        return self.send_pong()
 
     @xmpp.stanza
     def pong(self, elem):
         self.trigger(ReceivedPong)
         if self.stopped:
-            return self.closeConnection()
-        return self.sendPing()
+            return self.close()
+        return self.send_ping()
 
-    def sendPing(self):
+    def send_ping(self):
         return self.write(self.E('ping'))
 
-    def sendPong(self):
+    def send_pong(self):
         return self.write(self.E('pong'))
 
-
-### Client / Server Examples
-
-@xmpp.bind(xmpp.StreamReset)
 class Client(xmpp.Plugin):
 
     PONG_LIMIT = 5
 
     def __init__(self):
         self.pongs = 0
-        self.openStream({
-            'to': 'somebody@example.net',
-            'xml:lang': 'en',
-            'version': '1.0'
-        })
-
-    @xmpp.bind(xmpp.ReceivedStreamOpen)
-    def onStart(self, elem):
-        self.plugin(PingPong).sendPing()
+        self.plugin(PingPong).send_ping()
 
     @xmpp.bind(ReceivedPong)
-    def onPong(self, pingpong):
+    def on_pong(self, pingpong):
         self.pongs += 1
         if self.pongs > self.PONG_LIMIT:
             pingpong.stop()
@@ -108,27 +96,29 @@ class Stream(object):
     def __init__(self, name, app, dest):
         self.name = name
         self.dest = dest
-        print '%s: OPEN' % self.name
-        self.target = app.ContentHandler(self)._connectionOpen()
-        self.parser = xmpp.XMLParser(self.target)
+        self.reader = None
 
-    def read(self, data):
-        self.parser.feed(data)
+        print '%s: OPEN' % self.name
+        self.target = app(('127.0.0.1', 0), self)
+
+    def read(self, callback):
+        self.reader = callback
+        return self
 
     def write(self, data):
         print '%s:' % self.name, data
         if self.dest:
             self.SCHEDULE.append((self.dest, data))
+        return self
 
     def close(self):
-        self.target._connectionClosed()
         print '%s: CLOSED' % self.name
 
 if __name__ == '__main__':
-    server = xmpp.Application([PingPong, xmpp.Core])
-    client = xmpp.Application([Client, PingPong, xmpp.Core])
+    server = xmpp.Application(xmpp.ServerCore, [PingPong])
+    client = xmpp.Application(xmpp.ClientCore, [PingPong, Client])
 
-    SP = Stream('S', server, lambda d: CP.read(d))
-    CP = Stream('C', client, lambda d: SP.read(d))
+    SP = Stream('S', server, lambda d: CP.reader(d))
+    CP = Stream('C', client, lambda d: SP.reader(d))
 
     Stream.loop()
