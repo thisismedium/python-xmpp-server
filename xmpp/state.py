@@ -73,9 +73,9 @@ class State(object):
     def is_stanza(self, name):
         return name in self.stanzas
 
-    def bind_stanza(self, name, callback):
+    def bind_stanza(self, name, callback, replace=False):
         exists = self.stanzas.get(name)
-        if exists:
+        if exists and not replace:
             raise ValueError('The %r stanza is handled by %r.' % (
                 name,
                 exists

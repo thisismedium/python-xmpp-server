@@ -50,7 +50,7 @@ class PingPong(xmpp.Plugin):
     def ping(self, elem):
         self.trigger(ReceivedPing)
         if self.stopped:
-            return self.close_stream()
+            return self.close()
         return self.send_pong()
 
     @xmpp.stanza
@@ -68,7 +68,7 @@ class PingPong(xmpp.Plugin):
 
 class Client(xmpp.Plugin):
 
-    PONG_LIMIT = 5
+    PONG_LIMIT = 2
 
     def __init__(self):
         self.pongs = 0
@@ -97,6 +97,7 @@ class Stream(object):
         self.name = name
         self.dest = dest
         self.reader = None
+        self.socket = None
 
         print '%s: OPEN' % self.name
         self.target = app(('127.0.0.1', 0), self)
@@ -115,10 +116,12 @@ class Stream(object):
         print '%s: CLOSED' % self.name
 
 if __name__ == '__main__':
-    server = xmpp.Server([PingPong])
-    client = xmpp.Client([PingPong, Client])
-
-    SP = Stream('S', server, lambda d: CP.reader(d))
+    CA = xmpp.ClientAuth('xmpp', 'example.net', 'user@example.net', 'secret')
+    client = xmpp.Client(CA, [PingPong, Client])
     CP = Stream('C', client, lambda d: SP.reader(d))
+
+    SA = xmpp.ServerAuth('xmpp', 'example.net', { 'user@example.net': 'secret' })
+    server = xmpp.Server(SA, [PingPong])
+    SP = Stream('S', server, lambda d: CP.reader(d))
 
     Stream.loop()

@@ -4,19 +4,19 @@
 """application -- XMPP application and plugins"""
 
 from __future__ import absolute_import
-import functools, collections
+import functools, collections, sasl
 from . import xml, interfaces, core
 
 __all__ = (
-    'Server', 'Client', 'Application',
+    'Server', 'Client', 'Application', 'ServerAuth', 'ClientAuth',
     'bind', 'stanza', 'Plugin',  'PluginError'
 )
 
-def Server(*args, **kwargs):
-    return Application(core.ServerCore, *args, **kwargs)
+def Server(auth, *args, **kwargs):
+    return Application(core.ServerCore, *args, auth=auth, **kwargs)
 
-def Client(*args, **kwargs):
-    return Application(core.ClientCore, *args, **kwargs)
+def Client(auth, *args, **kwargs):
+    return Application(core.ClientCore, *args, auth=auth, **kwargs)
 
 def Application(Core, plugins=(), **kwargs):
     """Declare an XMPP Application.  An application is an XMLHandler
@@ -25,6 +25,34 @@ def Application(Core, plugins=(), **kwargs):
 
     plugins = CompiledPlugins(plugins)
     return functools.partial(Core, plugins=plugins, **kwargs)
+
+def ServerAuth(serv_type, host, users):
+
+    def user():
+        raise NotImplementedError
+
+    def password():
+        raise NotImplementedError
+
+    return sasl.SimpleAuth(
+        sasl.DigestMD5Password,
+        users,
+        user,
+        password,
+        lambda: serv_type,
+        lambda: host
+    )
+
+def ClientAuth(serv_type, host, username, password):
+
+    return sasl.SimpleAuth(
+        sasl.DigestMD5Password,
+        {},
+        lambda: username,
+        lambda: password,
+        lambda: serv_type,
+        lambda: host
+    )
 
 
 ### Static plugin decorators
@@ -463,6 +491,10 @@ class Plugin(object):
 
     def close(self):
         self.__core.close()
+        return None
+
+    def error(self, *args, **kwargs):
+        self.__core.error(*args, **kwargs)
         return None
 
     ## ---------- Events ----------

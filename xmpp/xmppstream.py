@@ -77,7 +77,6 @@ class XMPPTarget(object):
 
     def __init__(self, core):
         self.core = core
-        self.reset()
 
     def reset(self):
         self.stack = []   # Stack of elements received from the peer.
