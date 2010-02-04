@@ -4,8 +4,7 @@
 """readstream -- non-blocking unbuffered reads / buffered writes"""
 
 from __future__ import absolute_import
-import socket, errno
-from . import tcp
+from . import aio
 from .prelude import *
 
 __all__ = ('ReadStream', )
@@ -16,7 +15,7 @@ class ReadStream(object):
 
     def __init__(self, socket, io=None, read_chunk_size=4096):
         self.socket = socket
-        self.io = io or tcp.event_loop()
+        self.io = io or aio.loop()
 
         self._state = io.ERROR
         self._read_chunk_size = read_chunk_size
@@ -29,18 +28,29 @@ class ReadStream(object):
         self.io.add_handler(socket.fileno(), self._handle, self._state)
 
     def read(self, reader):
+        """Add a reader to this stream.  There can only be one reader
+        at a time; it is called with each chunk received from the
+        socket."""
+
         assert not self._reader, "There's already a reader installed."
         self._reader = reader
         self._add_io_state(self.io.READ)
         return self
 
     def write(self, data, callback=None):
+        """Write data to the stream.  The data is sent immediately;
+        any data that cannot be sent is buffered.  Once the write
+        buffer is emptied, the optional callback is called."""
+
         self._wb += data
         self._write_callback = callback
         self._wb and self._write()
         return self
 
     def shutdown(self, callback=None):
+        """Close this stream once the write buffer is emptied and
+        optionally run callback."""
+
         self._close_callback = callback
         self._reader = None
         if self._wb:
@@ -50,17 +60,26 @@ class ReadStream(object):
         return self
 
     def close(self):
+        """Immediately close the stream."""
+
         if self.socket:
             self.io.remove_handler(self.socket.fileno())
             self.socket.close()
             self.socket = None
+            self._close_callback and self._close_callback()
         return self
 
     def on_close(self, callback):
+        """Register a callback that is run after the stream is closed."""
+
         self._close_callback = callback
         return self
 
     def starttls(self, callback=None, **options):
+        """Begin TLS negotiation; options are passed through to
+        do_handshake().  If callback is given, it is called after a
+        successful negotiation."""
+
         ## Delay starttls until the write-buffer is emptied.
         if self._wb:
             self._write_callback = partial(self.starttls, callback, **options)
@@ -76,7 +95,7 @@ class ReadStream(object):
 
         ## Wrap the socket; give startttls() control until the
         ## handshake is finished.
-        tcp.starttls(
+        aio.starttls(
             self.socket, self._handle, self._state, self.io,
             success=success,
             failure=failure,
@@ -113,8 +132,8 @@ class ReadStream(object):
     def _read(self):
         try:
             chunk = self.socket.recv(self._read_chunk_size)
-        except socket.error as exc:
-            if exc[0] in (errno.EWOULDBLOCK, errno.EAGAIN):
+        except aio.SocketError as exc:
+            if aio.would_block(exc):
                 return
             else:
                 self.close()
@@ -131,8 +150,8 @@ class ReadStream(object):
             try:
                 sent = self.socket.send(self._wb)
                 self._wb = self._wb[sent:]
-            except socket.error as exc:
-                if exc[0] in (errno.EWOULDBLOCK, errno.EAGAIN):
+            except aio.SocketError as exc:
+                if aio.would_block(exc):
                     break
                 else:
                     self.close()

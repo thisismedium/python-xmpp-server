@@ -1,6 +1,6 @@
 from __future__ import absolute_import
 from .interfaces import *
-from .tcp import *
+from .aio import *
 from .readstream import *
 from .xmppstream import *
 from .state import *

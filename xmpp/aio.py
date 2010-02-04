@@ -1,15 +1,16 @@
 ## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
 ## See the LICENSE file for license terms and warranty disclaimer.
 
-"""tcpserver -- a simple tcp server"""
+"""aio -- asynchronous IO"""
 
 from __future__ import absolute_import
 import socket, ssl, select, errno, logging, fcntl
 from tornado import ioloop
 
 __all__ = (
-    'TCPServer', 'TCPClient', 'starttls', 'is_ssl',
-    'event_loop', 'start', 'IOLoop'
+    'TCPServer', 'TCPClient', 'SocketError', 'would_block', 'in_progress',
+    'starttls', 'is_ssl',
+    'loop', 'start', 'IOLoop'
 )
 
 class TCPServer(object):
@@ -41,7 +42,7 @@ class TCPServer(object):
 
     def __init__(self, handler, io=None):
         self.handler = handler
-        self.io = io or event_loop()
+        self.io = io or loop()
         self.socket = None
 
     def stop(self):
@@ -79,8 +80,8 @@ class TCPServer(object):
         while True:
             try:
                 conn, addr = self.socket.accept()
-            except socket.error as exc:
-                if exc[0] not in (errno.EWOULDBLOCK, errno.EAGAIN):
+            except SocketError as exc:
+                if not would_block(exc):
                     raise
                 return
             try:
@@ -114,7 +115,7 @@ class TCPClient(object):
     """
     def __init__(self, handler, io=None):
         self.handler = handler
-        self.io = io or event_loop()
+        self.io = io or loop()
         self.socket = None
         self.address = None
 
@@ -131,8 +132,8 @@ class TCPClient(object):
         try:
             self.address = (addr, int(port))
             sock.connect(self.address)
-        except socket.error as exc:
-            if exc[0] != errno.EINPROGRESS:
+        except SocketError as exc:
+            if not in_progress(exc):
                 raise
 
         self.socket = sock
@@ -151,6 +152,14 @@ class TCPClient(object):
                 exc_info=True
             )
             self.stop()
+
+SocketError = socket.error
+
+def would_block(exc):
+    return exc[0] in (errno.EWOULDBLOCK, errno.EAGAIN)
+
+def in_progress(exc):
+    return exc[0] == errno.EINPROGRESS
 
 
 ### TLS
@@ -259,7 +268,7 @@ class SSLSocket(ssl.SSLSocket):
             return self.write(data)
         except ssl.SSLError as exc:
             if exc.args[0] in (ssl.SSL_ERROR_WANT_WRITE, ssl.SSL_ERROR_WANT_READ):
-                raise socket.error(errno.EAGAIN)
+                raise SocketError(errno.EAGAIN)
             raise
 
     def recv(self, buflen=1024, flags=0):
@@ -274,20 +283,20 @@ class SSLSocket(ssl.SSLSocket):
             return self.read(buflen)
         except ssl.SSLError as exc:
             if exc.args[0] == ssl.SSL_ERROR_WANT_READ:
-                raise socket.error(errno.EAGAIN)
+                raise SocketError(errno.EAGAIN)
             raise
 
 
 ### IO Loop
 
-def event_loop():
+def loop():
     return IOLoop.instance()
 
 def start(services=(), io=None):
     """Start an event loop.  If services are given, start them before
     starting the loop and stop them before stopping the loop."""
 
-    io = io or event_loop()
+    io = io or loop()
     for svc in services:
         svc.start()
 

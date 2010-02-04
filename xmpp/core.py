@@ -314,7 +314,6 @@ class Core(i.CoreInterface):
             ## self.parser.close()
             try:
                 self.state.clear()
-                #self.stream.write('', self.stream.close)
                 self.stream.shutdown()
             finally:
                 self.stream = None

@@ -81,11 +81,11 @@ class XMPPTarget(object):
         if self.stack:
             ## A <stream:stream> has already been received.  This is
             ## the beginning of a stanza or part of a stanza.
-            # if len(self.stack) == 1 and not self.core.is_stanza(name):
-            #     raise StreamError(
-            #         'unsupported-stanza-type',
-            #         'Unrecognized stanza %r.' % name
-            #     )
+            if len(self.stack) == 1 and not self.core.is_stanza(name):
+                raise StreamError(
+                    'unsupported-stanza-type',
+                    'Unrecognized stanza %r.' % name
+                )
             parent = self.stack[-1]
             self.stack.append(xml.SubElement(parent, name, attrs, nsmap))
         elif name == self.STREAM:
