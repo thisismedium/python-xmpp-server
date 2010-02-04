@@ -4,7 +4,12 @@
 """interfaces -- abstract interfaces"""
 
 from __future__ import absolute_import
-import abc
+import abc, re
+
+__all__ = (
+    'CoreInterface', 'PluginManager',
+    'StreamError', 'StanzaError', 'IQError'
+)
 
 class CoreInterface(object):
     """XMPP Core interface.  See xmppstream.py and core.py."""
@@ -48,3 +53,32 @@ class PluginManager(object):
     def activate_default(self, state):
         """Activate normal plugins."""
 
+
+### Exceptions
+
+class StreamError(Exception):
+
+    def __init__(self, condition, text, *args, **kwargs):
+        super(StreamError, self).__init__(condition, text, *args, **kwargs)
+        self.condition = condition
+        self.text = text
+
+    def __str__(self):
+        return ': '.join((self.condition, self.text))
+
+class StanzaError(Exception):
+
+    def __init__(self, type, condition, *args, **kwargs):
+        super(StanzaError, self).__init__(type, condition, *args, **kwargs)
+        self.type = type
+        self.condition = condition
+
+    def __repr__(self):
+        return '<%s type=%r %r>' % (
+            type(self).__name__,
+            self.type,
+            self.condition
+        )
+
+class IQError(StanzaError):
+    pass

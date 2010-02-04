@@ -4,11 +4,12 @@
 """xmppstream -- an XMPP stream handler."""
 
 from __future__ import absolute_import
-import errno, socket, logging, abc
+import errno, socket, logging, abc, contextlib, collections, functools
 from tornado import ioloop
 from . import xml, readstream
+from .interfaces import StreamError
 
-__all__ = ('XMPPHandler', 'XMPPTarget', 'XMPPError')
+__all__ = ('XMPPHandler', 'XMPPTarget')
 
 class XMPPHandler(object):
     """Wrap a Core/XMPPTarget up in the TCPHandler interface.  Here is
@@ -51,24 +52,14 @@ class XMPPHandler(object):
 
     """
 
-    def __init__(self, CoreType, settings={}):
-        self.CoreType = CoreType
+    def __init__(self, Core, settings={}):
+        self.Core = Core
         self.settings = settings
 
-    def __call__(self, socket, addr, io_loop):
-        stream = readstream.ReadStream(socket, io_loop)
-        self.CoreType(addr, stream, **self.settings)
+    def __call__(self, socket, addr, io_loop, **kwargs):
+        stream = readstream.ReadStream(socket, io_loop, **kwargs)
+        self.Core(addr, stream, **self.settings)
         return self
-
-class XMPPError(Exception):
-
-    def __init__(self, condition, text, *args, **kwargs):
-        super(XMPPError, self).__init__(condition, text, *args, **kwargs)
-        self.condition = condition
-        self.text = text
-
-    def __str__(self):
-        return ': '.join((self.condition, self.text))
 
 class XMPPTarget(object):
     """An lxml XMLParser Target that processes an XMPP stream."""
@@ -77,10 +68,10 @@ class XMPPTarget(object):
 
     def __init__(self, core):
         self.core = core
+        self.stack = [] # Stack of elements received from the peer.
 
     def reset(self):
-        self.stack = []   # Stack of elements received from the peer.
-        return self
+        del self.stack[:]
 
     ### ---------- Parser Target ----------
 
@@ -90,11 +81,11 @@ class XMPPTarget(object):
         if self.stack:
             ## A <stream:stream> has already been received.  This is
             ## the beginning of a stanza or part of a stanza.
-            if len(self.stack) == 1 and not self.core.is_stanza(name):
-                raise XMPPError(
-                    'unsupported-stanza-type',
-                    'Unrecognized stanza %r.' % name
-                )
+            # if len(self.stack) == 1 and not self.core.is_stanza(name):
+            #     raise StreamError(
+            #         'unsupported-stanza-type',
+            #         'Unrecognized stanza %r.' % name
+            #     )
             parent = self.stack[-1]
             self.stack.append(xml.SubElement(parent, name, attrs, nsmap))
         elif name == self.STREAM:
@@ -103,7 +94,7 @@ class XMPPTarget(object):
             self.stack.append(elem)
             self.core.handle_open_stream(attrs)
         else:
-            raise XMPPError(
+            raise StreamError(
                 'xml-not-well-formed',
                 'Expected %r, not %r.' % (self.STREAM, name)
             )
@@ -113,14 +104,14 @@ class XMPPTarget(object):
         </stream:stream> or the end of a stanza, notify the core."""
 
         if not self.stack:
-            raise XMPPError(
+            raise StreamError(
                 'xml-not-well-formed',
                 'Unexpected closing %r.' % name
             )
 
         elem = self.stack.pop()
         if elem.tag != name:
-            raise XMPPError(
+            raise StreamError(
                 'xml-not-well-formed',
                 'Expected closing %r, not %r.' % (elem.tag, name)
             )
@@ -134,7 +125,7 @@ class XMPPTarget(object):
         """Character data is appended to the current element."""
 
         if not self.stack:
-            raise XMPPError(
+            raise StreamError(
                 'xml-not-well-formed',
                 'Unexpected character data: %r' % data
             )
@@ -151,3 +142,4 @@ class XMPPTarget(object):
 
     def close(self):
         """The parser has closed successfully."""
+        self.reset()

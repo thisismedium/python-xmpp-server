@@ -5,26 +5,26 @@
 
 from __future__ import absolute_import
 import functools, collections, sasl
-from . import xml, interfaces, core
+from . import xml, interfaces, core, xmppstream
 
 __all__ = (
     'Server', 'Client', 'Application', 'ServerAuth', 'ClientAuth',
     'bind', 'stanza', 'Plugin',  'PluginError'
 )
 
-def Server(auth, *args, **kwargs):
-    return Application(core.ServerCore, *args, auth=auth, **kwargs)
+def Server(settings):
+    return Application(core.ServerCore, settings)
 
-def Client(auth, *args, **kwargs):
-    return Application(core.ClientCore, *args, auth=auth, **kwargs)
+def Client(settings):
+    return Application(core.ClientCore, settings)
 
-def Application(Core, plugins=(), **kwargs):
+def Application(Core, settings):
     """Declare an XMPP Application.  An application is an XMLHandler
     that dispatches to stanza handlers.
     """
 
-    plugins = CompiledPlugins(plugins)
-    return functools.partial(Core, plugins=plugins, **kwargs)
+    settings['plugins'] = CompiledPlugins(settings.pop('plugins', ()))
+    return xmppstream.XMPPHandler(Core, settings)
 
 def ServerAuth(serv_type, host, users):
 
@@ -301,7 +301,7 @@ class CompiledPlugins(interfaces.PluginManager):
 
         ## This nsmap can be used to create an ElementMaker that is
         ## aware of the xmlns attributes of the plugins.
-        self.nsmap = merge_nsmaps(plugins)
+        self.nsmap = merge_nsmaps(plugins) or type(self).nsmap
 
         ## The taxonomy facilitates Plugin.plugin().
         self.taxonomy = plugin_taxonomy(plugins)
@@ -475,6 +475,10 @@ class Plugin(object):
         self.__core.write(data)
         return self
 
+    def iq(self, *args, **kwargs):
+        self.__core.iq(*args, **kwargs)
+        return self
+
     def open_stream(self):
         self.__core.open_stream()
         return self
@@ -518,3 +522,8 @@ class Plugin(object):
     def trigger(self, event, *args, **kwargs):
         self.__state.trigger(event, self, *args, **kwargs)
         return self
+
+    ## ---------- Additional ----------
+
+    def routes(self, jid):
+        return self.__core.routes(jid)

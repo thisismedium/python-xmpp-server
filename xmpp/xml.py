@@ -6,10 +6,12 @@
 from __future__ import absolute_import
 import re
 from lxml import etree, builder
+from . import interfaces as i
 
 __all__ = (
     'Element', 'SubElement', 'tostring', 'XMLSyntaxError', 'ElementMaker',
-    'Parser', 'is_element', 'tag', 'text', 'child', 'clark',
+    'Parser', 'is_element', 'tag', 'text', 'child', 'xpath', 'clark',
+    'jid', 'is_full_jid', 'is_bare_jid',
     'open_tag', 'close_tag', 'stanza_tostring'
 )
 
@@ -20,6 +22,7 @@ SubElement = etree.SubElement
 tostring = etree.tostring
 XMLSyntaxError = etree.XMLSyntaxError
 ElementMaker = builder.ElementMaker
+xpath = etree.ETXPath
 
 
 ### Parser
@@ -45,23 +48,59 @@ class Parser(object):
     """
 
     def __init__(self, target, **kwargs):
-        self.settings = kwargs
         self.target = target
-        self.reset()
+        self.parser = etree.XMLParser(target=target, **kwargs)
+        self.rb = ''
+        self.stop = False
+        self.more = False
 
     def reset(self):
-        self.target.reset()
-        ## Trying to re-use the same parser by clearing it with
-        ## parser.stop() results in segfaults.
-        self.parser = etree.XMLParser(target=self.target, **self.settings)
-        return self.feed('') # Prime the XMLParser
-
-    def feed(self, data):
-        self.parser.feed(data)
+        self.stop = True
         return self
 
+    def feed(self, data):
+        self.rb += data
+        self.more = bool(self.rb)
+        while self.more:
+            for token in self.tokenize():
+                self.parser.feed(token)
+            if self.more:
+                self.start()
+        return self
+
+    def start(self):
+        if self.stop:
+            self.close()
+            self.target.reset()
+            self.stop = False
+        self.parser.feed('')
+        return self
+
+    def tokenize(self):
+        while self.rb and not self.stop:
+            if self.rb.startswith('<'):
+                idx = self.rb.find('>')
+                if idx == -1:
+                    break
+                yield self.rb[0:idx + 1]
+                self.rb = self.rb[idx + 1:]
+            else:
+                idx = self.rb.find('<')
+                if idx == -1:
+                    break
+                yield self.rb[0:idx]
+                self.rb = self.rb[idx:]
+
+        ## Update the "more" flag to indicate whether more tokens are
+        ## available.  The loop may have terminated early if the
+        ## parser was reset from inside an event handler.
+        self.more = bool(self.rb and self.stop)
+
     def close(self):
-        self._destroy()
+        try:
+            self.parser.close()
+        except XMLSyntaxError:
+            pass
         return self
 
 
@@ -83,14 +122,18 @@ def tag(elem, default=None):
 def text(elem, default=None):
     return elem.text if is_element(elem) else default
 
-def child(elem, nth, default=None):
+def child(elem, nth=0, default=None):
     if isinstance(nth, int):
         try:
             return elem[nth]
         except IndexError:
             return default
     elif isinstance(nth, basestring):
-        return next(elem.iter(nth), default)
+        if '/' in nth:
+            found = xpath(nth)(elem)
+            return found[0] if found else default
+        else:
+            return next(elem.iter(nth), default)
     else:
         raise ValueError('child: expected nth to be a string or number.')
 
@@ -136,6 +179,39 @@ def clark(obj, ns=None, nsmap=None):
             obj = (ns, obj)
 
     return u'{%s}%s' % (obj[0] or ns, obj[1]) if (obj[0] or ns) else obj[1]
+
+JID = re.compile('([^@/]+)(?:@([^/]+))?(?:/(.+))?$')
+
+def jid(name, host=None, resource=None):
+    """Replace host or resource segments of a Jabber ID (JID).
+
+    >>> jid('foo', 'bar.com', 'baz')
+    u'foo@bar.com/baz'
+    >>> jid('foo@bar.com/baz', host='mumble.net')
+    u'foo@mumble.net/baz'
+    """
+    if host is None and resource is None:
+        return name
+
+    probe = JID.match(name)
+    if not probe:
+        raise i.StreamError('internal-server-error', 'Bad JID: %r' % name)
+
+    host = probe.group(2) if host is None else host
+    resource = probe.group(3) if resource is None else resource
+    if host and resource:
+        return u'%s@%s/%s' % (probe.group(1), host, resource)
+    elif host:
+        return u'%s@%s' % (probe.group(1), host)
+    else:
+        ## FIXME: Is this allowed?
+        return u'%s/%s' % (probe.group(1), resource)
+
+def is_full_jid(obj):
+    return isinstance(obj, basestring) and '/' in obj
+
+def is_bare_jid(obj):
+    return isisntance(obj, basestring) and '@' in obj and '/' not in obj
 
 
 ### Hacks

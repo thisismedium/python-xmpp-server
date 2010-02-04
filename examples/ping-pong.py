@@ -29,7 +29,7 @@ between Application instances.  This can be used to test Application
 interaction without using sockets.
 """
 
-import xmpp
+import os, time, xmpp
 
 
 ### PingPong "plugin"
@@ -72,6 +72,9 @@ class Client(xmpp.Plugin):
 
     def __init__(self):
         self.pongs = 0
+
+    @xmpp.bind(xmpp.SessionStarted)
+    def send_ping(self):
         self.plugin(PingPong).send_ping()
 
     @xmpp.bind(ReceivedPong)
@@ -89,39 +92,74 @@ class Stream(object):
     @classmethod
     def loop(cls):
         while cls.SCHEDULE:
-            (callback, data) = cls.SCHEDULE[0]
+            (callback, data, done) = cls.SCHEDULE[0]
             del cls.SCHEDULE[0]
-            callback(data)
+            if callback:
+                callback(data)
+            elif isinstance(data, float) and data < time.time():
+                if cls.SCHEDULE:
+                    cls.SCHEDULE.append((callback, data, done))
+                else:
+                    done and done()
+            else:
+                done and done()
+
+    class IO(object):
+        def add_timeout(self, when, callback):
+            Stream.SCHEDULE.append((None, time.time(), callback))
 
     def __init__(self, name, app, dest):
         self.name = name
         self.dest = dest
         self.reader = None
+        self.closed = None
         self.socket = None
+        self.io = self.IO()
 
         print '%s: OPEN' % self.name
-        self.target = app(('127.0.0.1', 0), self)
+        self.target = app.Core(('127.0.0.1', 0), self, **app.settings)
 
     def read(self, callback):
         self.reader = callback
         return self
 
-    def write(self, data):
+    def shutdown(self, callback=None):
+        self.on_close(callback)
+        self.SCHEDULE.append((None, None, self.close))
+
+    def on_close(self, callback):
+        self.closed = callback
+
+    def write(self, data, callback=None):
         print '%s:' % self.name, data
         if self.dest:
-            self.SCHEDULE.append((self.dest, data))
+            self.SCHEDULE.append((self.dest, data, callback))
         return self
 
     def close(self):
         print '%s: CLOSED' % self.name
+        self.closed and self.closed()
 
 if __name__ == '__main__':
-    CA = xmpp.ClientAuth('xmpp', 'example.net', 'user@example.net', 'secret')
-    client = xmpp.Client(CA, [PingPong, Client])
+    client = xmpp.Client({
+        'plugins': [PingPong, Client],
+        'auth': xmpp.ClientAuth('xmpp', 'example.net', 'user@example.net', 'secret'),
+        'resources': xmpp.state.Resources()
+    })
+
+    server = xmpp.Server({
+        'plugins': [PingPong],
+        'auth': xmpp.ServerAuth('xmpp', 'example.net', { 'user@example.net': 'secret' }),
+        'resources': xmpp.state.Resources(),
+        'certfile': os.path.join(os.path.dirname(__file__), 'certs/self.crt'),
+        'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
+    })
+
     CP = Stream('C', client, lambda d: SP.reader(d))
-
-    SA = xmpp.ServerAuth('xmpp', 'example.net', { 'user@example.net': 'secret' })
-    server = xmpp.Server(SA, [PingPong])
     SP = Stream('S', server, lambda d: CP.reader(d))
-
     Stream.loop()
+
+    # SP = xmpp.TCPServer(server).bind('127.0.0.1', '9000')
+    # CP = xmpp.TCPClient(client).connect('127.0.0.1', '9000')
+    # xmpp.start([SP, CP])
+

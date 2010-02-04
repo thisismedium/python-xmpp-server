@@ -4,14 +4,21 @@
 """state -- xmpp connection state and event management"""
 
 from __future__ import absolute_import
-import collections, functools, contextlib
-from .interfaces import PluginManager
+import weakref, random, hashlib
+from . import interfaces as i, xmppstream, xml
+from .prelude import *
 
-__all__ = ('Event', 'State')
+__all__ = ('Event', 'State', 'Resources', 'NoRoute')
+
+
+### Events
 
 class Event(object):
     """Subclass this to declare a new Event.  Use the docstring to
     describe the event and how it should be used."""
+
+
+### State
 
 class State(object):
     """Manage events, synchronize plugins, keep plugin state."""
@@ -21,13 +28,15 @@ class State(object):
         self.plugins = plugins or NoPlugins()
 
         self.locked = False
-        self.schedule = collections.deque()
-        self.events = collections.defaultdict(list)
+        self.schedule = deque()
+        self.events = ddict(list)
         self.stanzas = {}
         self.state = {}
 
     def reset(self):
-        self.clear()
+        return self.flush(True).clear().install()
+
+    def install(self):
         self.plugins.install(self)
         return self
 
@@ -59,8 +68,7 @@ class State(object):
         return self
 
     def one(self, kind, callback):
-        self.bind(kind, Once(callback))
-        return self
+        return self.bind(kind, Once(callback))
 
     def unbind(self, kind, callback):
         if kind in self.events:
@@ -68,26 +76,6 @@ class State(object):
                 self.events[kind].remove(callback)
             except ValueError:
                 pass
-        return self
-
-    def is_stanza(self, name):
-        return name in self.stanzas
-
-    def bind_stanza(self, name, callback, replace=False):
-        exists = self.stanzas.get(name)
-        if exists and not replace:
-            raise ValueError('The %r stanza is handled by %r.' % (
-                name,
-                exists
-            ))
-        self.stanzas[name] = callback
-        return self
-
-    def unbind_stanza(name):
-        try:
-            del self.stanzas[name]
-        except KeyError:
-            pass
         return self
 
     def trigger(self, event, *args, **kwargs):
@@ -99,19 +87,45 @@ class State(object):
                 self.run(handler, *args, **kwargs)
         return self
 
-    def trigger_stanza(self, elem):
-        handler = self.stanzas.get(elem.tag)
+    ## ---------- Stanzas ----------
+
+    def is_stanza(self, name):
+        return name in self.stanzas
+
+    def bind_stanza(self, name, callback, replace=True):
+        exists = self.stanzas.get(name)
+        if exists and not replace:
+            raise ValueError('The %r stanza is handled by %r.' % (
+                name,
+                exists
+            ))
+        self.stanzas[name] = callback
+        return self
+
+    def one_stanza(self, name, callback, *args, **kwargs):
+        return self.bind_stanza(name, Once(callback), *args, **kwargs)
+
+    def unbind_stanza(name):
+        try:
+            del self.stanzas[name]
+        except KeyError:
+            pass
+        return self
+
+    def trigger_stanza(self, name, *args, **kwargs):
+        handler = self.stanzas.get(name)
         if not handler:
-            raise XMPPError(
+            raise i.StreamError(
                 'unsupported-stanza-type',
-                'Unrecognized stanza %r.' % elem.tag
+                'Unrecognized stanza %r.' % name
             )
-        #print 'trigger-stanza', self.locked, elem
-        return self.run(handler, elem)
+        elif isinstance(handler, Once):
+            del self.stanzas[name]
+        return self.run(handler, *args, **kwargs)
 
     ## ---------- Synchronization ----------
 
-    @contextlib.contextmanager
+    @contextmanager
     def lock(self):
         """A re-entrant lock that guards events and writes to the
         stream.  This is useful for coordinating activity across many
@@ -131,7 +145,7 @@ class State(object):
         through flush()."""
 
         if self.locked:
-            self.schedule.append(functools.partial(method, *args, **kwargs))
+            self.schedule.append(partial(method, *args, **kwargs))
             return self
 
         with self.lock():
@@ -152,16 +166,105 @@ class State(object):
         finally:
             self.locked = False
 
-class Once(collections.namedtuple('once', 'callback')):
+class Once(namedtuple('once', 'callback')):
     """An event handler that should only be called once."""
 
     def __call__(self, *args, **kwargs):
         return self.callback(*args, **kwargs)
 
-class NoPlugins(PluginManager):
+class NoPlugins(i.PluginManager):
 
-    def reset(self, state):
+    def install(self, state):
         pass
 
-    def activate_default(self, core):
+    def activate_default(self, state):
         pass
+
+
+### Resources
+
+class NoRoute(Exception):
+    """Routes are used to deliver messages.  This exception is raised
+    when no routes can be found for a particular jid."""
+
+class Resources(object):
+    """Track resource bindings for a node.
+
+    See also: core.Bind
+    """
+
+    def __init__(self):
+
+        ## This technique is derived from weakref.WeakValueDictionary
+        def remove(wr, selfref=weakref.ref(self)):
+            self = selfref()
+            if self is not None:
+                self.unbind(wr.key)
+        self._remove = remove
+
+        self._bound = {}
+        self._routes = ddict(set)
+
+    def bind(self, name, core):
+        """Create a fresh binding."""
+
+        resource = '%s-%d' % (name or 'Resource', random.getrandbits(32))
+        jid = xml.jid(core.authJID, resource=md5(resource))
+        return self._bind(core, core.authJID, jid)
+
+    def bound(self, jid, core):
+        """Register a binding created for this core."""
+
+        return self._bind(core, xml.jid(jid, resource=False), jid)
+
+    def _bind(self, core, bare, jid):
+        ## Bindings are made with weak references to keep the
+        ## book-keeping overhead in the core to a minimum.
+        wr = weakref.KeyedRef(core, self._remove, jid)
+        if self._bound.setdefault(jid, wr)() is not core:
+            raise i.IQError('cancel', 'conflict')
+        self._routes[bare].add(jid)
+        return jid
+
+    def unbind(self, jid):
+        """Destroy a registered binding."""
+
+        del self._bound[jid]
+        bare = xml.jid(jid, resource=False)
+        routes = self._routes.get(bare)
+        if routes:
+           if len(routes) > 1:
+               routes.remove(jid)
+           else:
+               del self._routes[bare]
+        return self
+
+    def routes(self, jid):
+        """Produce a sequence of routes to the given jid.
+
+        Routes are used to deliver messaged.  A full jid has only one
+        route; a bare jid may have multiple routes.  If there are no
+        routes found, a NoRoutes exception is raised."""
+
+        bound = self._bound
+
+        ## Only one route for a full JID
+        if xml.is_full_jid(jid):
+            wr = bound.get(jid)
+            if wr is None:
+                raise NoRoute(jid)
+            return ((jid, wr()),)
+
+        ## A bare JID may map to multiple full JIDs.
+        routes = self._routes.get(jid)
+        if routes:
+            routes = tuple(
+                (w.key, w())
+                for w in ifilter(bound.get(j) for j in routes)
+            )
+        if not routes:
+            raise NoRoute(jid)
+        return routes
+
+def md5(data):
+    return hashlib.md5(data).hexdigest()
