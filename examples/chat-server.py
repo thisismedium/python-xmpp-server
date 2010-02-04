@@ -38,5 +38,5 @@ if __name__ == '__main__':
         # 'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
     })
 
-    SP = xmpp.TCPServer(server).bind('192.168.0.27', 5222)
+    SP = xmpp.TCPServer(server).bind('127.0.0.1', 5222)
     xmpp.start([SP])
