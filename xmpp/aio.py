@@ -14,15 +14,15 @@ __all__ = (
 )
 
 class TCPServer(object):
-    """A non-blocking, single-threaded HTTP server implemented using
-    the tornado ioloop.  This implementation is heavily based on the
-    tornado HTTPServer.  A simple echo server is:
+    """A non-blocking, single-threaded TCP server.  This
+    implementation is heavily based on the tornado HTTPServer.  A
+    simple echo server is:
 
         import xmpp
         from tornado.iostream import IOStream
 
         def echo(socket, address, io):
-            stream = IOStream(socket, io=io)
+            stream = IOStream(socket, io_loop=io)
 
             def handle(data):
                 if data == 'goodbye\n':
@@ -313,16 +313,13 @@ def start(services=(), io=None):
         try:
             svc.stop()
         except:
-            logging.error(
-                'Error while shutting down %r.' % svc,
-                exc_info=True
-            )
+            logging.exception('Error while shutting down %r.' % svc)
 
     if normal:
         logging.info('Shutting down event loop.')
         io.stop()
     else:
-        logging.error('Uncaught exception', exc_info=True)
+        logging.exception('Uncaught exception')
         raise
 
 
