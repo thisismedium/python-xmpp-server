@@ -2,9 +2,15 @@
  Python XMPP Server
 ====================
 
-An XMPP Server written in Python.  Examples are available here_.
+An XMPP Server written in Python.  Examples are available here_.  This
+project is currently in an alpha state and under active development.
+The core supports TLS, SASL, Resource Binding, and Sessions.  The
+rudimentary chat-server_ example has been successfully tested against
+Pidgin_ clients (e.g. Adium, Proteus, etc.).
 
 .. _here: http://github.com/thisismedium/python-xmpp-server/tree/master/examples/
+.. _chat-server: http://github.com/thisismedium/python-xmpp-server/tree/master/examples/chat-server.py
+.. _Pidgin: http://www.pidgin.im/
 
 Prerequisites
 ~~~~~~~~~~~~~
