@@ -388,9 +388,8 @@ class SessionStarted(i.Event):
 
 ### Features
 
-class TLS(plugin.Feature):
+class StartTLS(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-tls'
-    TAG = '{%s}starttls' % __xmlns__
 
     def __init__(self, **options):
         self.options = options
@@ -430,9 +429,8 @@ class TLS(plugin.Feature):
         self._active = False
         self.trigger(StreamSecured).reset_stream()
 
-class SASL(plugin.Feature):
+class Mechanisms(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-sasl'
-    TAG = '{%s}mechanisms' % __xmlns__
 
     DEFAULT_MECHANISMS = (sasl.Plain, sasl.DigestMD5)
 
@@ -544,7 +542,6 @@ class SASL(plugin.Feature):
 
 class Bind(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-bind'
-    TAG = '{%s}bind' % __xmlns__
 
     def __init__(self, resources):
         self.resources = resources
@@ -581,7 +578,6 @@ class Bind(plugin.Feature):
 
 class Session(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-session'
-    TAG = '{%s}session' % __xmlns__
 
     def active(self):
         return bool(self.authJID)

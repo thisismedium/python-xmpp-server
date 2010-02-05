@@ -65,8 +65,10 @@ def server_features(settings):
     auth = server_auth(settings)
     resources = default_resources(settings)
     return (
-        (core.TLS, dict(ipop(settings, 'certfile', 'keyfile'), server_side=True)),
-        (core.SASL, dict(ipop(settings, 'mechanisms'), auth=auth)),
+        (core.StartTLS, dict(
+            ipop(settings, 'certfile', 'keyfile'),
+            server_side=True)),
+        (core.Mechanisms, dict(ipop(settings, 'mechanisms'), auth=auth)),
         (core.Bind, dict(resources=resources)),
         core.Session
     )
@@ -126,8 +128,8 @@ def client_features(settings):
     auth = client_auth(settings)
     resources = default_resources(settings)
     return (
-        core.TLS,
-        (core.SASL, dict(ipop(settings, 'mechanisms'), auth=auth)),
+        core.StartTLS,
+        (core.Mechanisms, dict(ipop(settings, 'mechanisms'), auth=auth)),
         (core.Bind, dict(resources=resources)),
         core.Session
     )

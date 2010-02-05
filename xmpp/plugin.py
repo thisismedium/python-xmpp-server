@@ -641,10 +641,22 @@ class FeatureList(list):
 
 ### Feature Base Class
 
+class FeatureType(PluginType):
+
+    def __new__(mcls, name, bases, attr):
+        cls = PluginType.__new__(mcls, name, bases, attr)
+        if 'TAG' not in attr:
+            ## The client uses this to map feature clause names to
+            ## Feature instances.  See FeatureList.active().
+            cls.TAG = xml.clark(name.lower(), cls.__xmlns__)
+        return cls
+
 class Feature(Plugin):
     """A Feature is a special plugin that keeps its state for the
     lifetime of a connection.  Features are negotiated when a stream
     is opened."""
+
+    __metaclass__ = FeatureType
 
     def active(self):
         """Is this feature currently active?"""
