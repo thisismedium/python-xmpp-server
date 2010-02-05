@@ -57,6 +57,14 @@ class Core(i.CoreInterface):
 
         return self
 
+    def activate(self):
+        """Default plugin activation is done after basic Features have
+        been negotiated."""
+
+        self.parser.stop_tokenizing()
+        self.state.activate()
+        return self
+
     def on_stream_secured(self, tls):
         self.secured = True
 
@@ -390,7 +398,6 @@ class TLS(plugin.Feature):
             not options.get('server_side')
             or (options.get('keyfile') and options.get('certfile'))
         )
-        print 'active?', options, self._active
 
     def active(self):
         return self._active and self.use_tls()
@@ -612,7 +619,7 @@ class ClientCore(Core):
         self.state.trigger(ReceivedOpenStream).run(self._opened)
 
     def _opened(self):
-        self.state.one(SessionStarted, thunk(self.state.activate))
+        self.state.one(SessionStarted, thunk(self.activate))
         self.wait_for_features()
 
     ### ---------- Outgoing Stream ----------
@@ -637,7 +644,7 @@ class ServerCore(Core):
     def _opened(self):
         self.open_stream()
         if not self.send_features():
-            self.state.activate()
+            self.activate()
 
     def handle_stanza(self, elem):
         if self.authJID:

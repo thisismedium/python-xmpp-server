@@ -51,6 +51,7 @@ class Parser(object):
         self.target = target
         self.parser = etree.XMLParser(target=target, **kwargs)
         self.rb = ''
+        self.feed = self.feed_tokens
         self.stop = False
         self.more = False
 
@@ -67,14 +68,11 @@ class Parser(object):
         return self
 
     def stop_tokenizing(self):
-        if self.rb is not None:
-            if self.rb:
-                self.parser.feed(self.rb)
-            self.rb = None
+        if self.feed == self.feed_tokens:
             self.feed = self.parser.feed
         return self
 
-    def feed(self, data):
+    def feed_tokens(self, data):
         ## This method buffers data and carefully feeds tokens from
         ## the buffer into the parser.  The parser target may reset
         ## the parser while a particular token is being handled, so if
