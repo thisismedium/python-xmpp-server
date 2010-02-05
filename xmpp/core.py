@@ -28,10 +28,7 @@ class Core(i.CoreInterface):
         self.state = state.State(self, plugins)
 
         self.parser = xml.Parser(xmppstream.XMPPTarget(self)).start()
-        self.E = xml.ElementMaker(
-            namespace=self.state.plugins.__xmlns__,
-            nsmap=self.state.plugins.nsmap
-        )
+        self.E = xml.ElementMaker(namespace=self.__xmlns__, nsmap=self.nsmap)
 
         self.install_features(features)
         self._reset()
@@ -39,6 +36,9 @@ class Core(i.CoreInterface):
     def __repr__(self):
         peer = self.stream.socket and self.stream.socket.getpeername()
         return '<%s %r>' % (type(self).__name__, peer)
+
+    __xmlns__ = property(lambda s: s.state.plugins.__xmlns__)
+    nsmap = property(lambda s: s.state.plugins.nsmap)
 
     ### ---------- Stream Interaction ----------
 
@@ -544,9 +544,8 @@ class SASL(plugin.Feature):
 class Bind(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-bind'
     TAG = '{%s}bind' % __xmlns__
-    IQ_BIND = '{jabber:client}iq/{%s}bind' % __xmlns__
-    RESOURCE = '{%s}bind/{%s}resource' % (__xmlns__, __xmlns__)
-    JID = '{%s}bind/jid' % __xmlns__
+    RESOURCE = '{%s}bind/{%s}resource/text()' % (__xmlns__, __xmlns__)
+    JID = '{%s}bind/{%s}jid/text()' % (__xmlns__, __xmlns__)
 
     def __init__(self, resources):
         self.resources = resources
@@ -558,13 +557,12 @@ class Bind(plugin.Feature):
     ### ---------- Server ----------
 
     def include(self):
-        self.bind(self.IQ_BIND, self.new_binding)
+        self.iq('bind', self.new_binding)
         return self.E.bind()
 
     def new_binding(self, iq):
         assert iq.get('type') == 'set'
-        name = xml.text(xml.child(iq, self.RESOURCE))
-        self.jid = self.resources.bind(name, self)
+        self.jid = self.resources.bind(xml.child(iq, self.RESOURCE), self)
         self.iq('result', iq, self.E.bind(self.E.jid(self.jid)))
         return self.trigger(StreamBound)
 
@@ -575,13 +573,13 @@ class Bind(plugin.Feature):
 
     def bound(self, iq):
         assert iq.get('type') == 'result'
-        self.jid = self.resources.bound(xml.child(self.JID), self)
+        self.jid = self.resources.bound(xml.child(iq, self.JID), self)
+        print 'BOUND', self.jid
         return self.trigger(StreamBound)
 
 class Session(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-session'
     TAG = '{%s}session' % __xmlns__
-    IQ_SESSION = '{jabber:client}iq/{%s}session' % __xmlns__
 
     def active(self):
         return bool(self.authJID)
@@ -589,7 +587,7 @@ class Session(plugin.Feature):
     ### ---------- Server ----------
 
     def include(self):
-        self.bind(self.IQ_SESSION, self.start)
+        self.iq('session', self.start)
         return self.E.session()
 
     def start(self, iq):

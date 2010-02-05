@@ -443,8 +443,30 @@ class Plugin(object):
         self.__core.write(*args)
         return self
 
-    def iq(self, *args, **kwargs):
-        self.__core.iq(*args, **kwargs)
+    def iq(self, kind=None, elem=None, *args, **kw):
+        """Write an IQ stanza to the stream, bind a callback for
+        get/set, or bind iq stanza handlers."""
+
+        ## iq('get/set', callback, iq-body)
+        ## iq('result/error', iq-elem)
+        if isinstance(kind, basestring) and (args or xml.is_element(elem)):
+            ## elem may be an Element or callback
+            self.__core.iq(kind, elem, *args)
+            return self
+
+        ## iq('kind', handle [, kind=handle, ...])
+        ## iq([('kind', handle), ... [, kind=handle, ...]])
+        assert not args, 'Unexpected arguments: %r' % args
+        if isinstance(kind, basestring):
+            kw[kind] = elem
+        elif kind:
+            kw = chain_items(kind, kw)
+
+        ## 'kind' ==> '{jabber:client}iq/{__xmlns__}kind'
+        iq = '{%s}iq/%%s' % self.__core.__xmlns__
+        bind = self.__state.bind_stanza
+        for (name, handle) in items(kw):
+            bind(iq % xml.clark(name, self.__xmlns__), handle)
         return self
 
     def error(self, *args, **kwargs):

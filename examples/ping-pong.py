@@ -129,7 +129,7 @@ class Stream(object):
         self.closed = callback
 
     def write(self, data, callback=None):
-        # print '%s:' % self.name, data
+        print '%s:' % self.name, data
         if self.dest:
             self.SCHEDULE.append((self.dest, data, callback))
         return self
@@ -154,11 +154,11 @@ if __name__ == '__main__':
         'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
     })
 
-    # CP = Stream('C', client, lambda d: SP.reader(d))
-    # SP = Stream('S', server, lambda d: CP.reader(d))
-    # Stream.loop()
+    CP = Stream('C', client, lambda d: SP.reader(d))
+    SP = Stream('S', server, lambda d: CP.reader(d))
+    Stream.loop()
 
-    SP = xmpp.TCPServer(server).bind('127.0.0.1', '9000')
-    CP = xmpp.TCPClient(client).connect('127.0.0.1', '9000')
-    xmpp.start([SP, CP])
+    # SP = xmpp.TCPServer(server).bind('127.0.0.1', '9000')
+    # CP = xmpp.TCPClient(client).connect('127.0.0.1', '9000')
+    # xmpp.start([SP, CP])
 
