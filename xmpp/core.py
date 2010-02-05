@@ -65,7 +65,7 @@ class Core(i.CoreInterface):
 
     def on_stream_bound(self, bindings):
         self.authJID = bindings.jid
-        self.bindings = bindings
+        self.resources = bindings.resources
 
     def timeout(self, delay, callback):
         self.stream.io.add_timeout(time.time() + delay, callback)
@@ -209,7 +209,7 @@ class Core(i.CoreInterface):
             error.append(self.E.text({ 'xmlns': self.STANZAS }, text))
 
         stanza = self.E(elem.tag, {
-            'from': self.fromJID,
+            'from': self.serverJID,
             'type': 'error',
             'id': elem.get('id')
         })
@@ -226,7 +226,7 @@ class Core(i.CoreInterface):
         ## Bind.  They are updated by event listeners; see listen().
         self.secured = False
         self.authJID = None
-        self.bindings = None
+        self.resources = None
 
         self.features = features.install(self.state) if features else ()
         return self
@@ -309,13 +309,10 @@ class Core(i.CoreInterface):
             *data
         ))
 
-    def message(self, elem):
-        if not self.authJID:
-            return self.stream_error('not-authorized')
-
-    def presense(self, elem):
-        if not self.authJID:
-            return self.stream_error('not-authorized')
+    def routes(self, jid):
+        if self.resources is None:
+            raise state.NoRoute(jid)
+        return self.resources.routes(jid)
 
     ### ---------- Private ----------
 
@@ -389,7 +386,11 @@ class TLS(plugin.Feature):
 
     def __init__(self, **options):
         self.options = options
-        self._active = True
+        self._active = (
+            not options.get('server_side')
+            or (options.get('keyfile') and options.get('certfile'))
+        )
+        print 'active?', options, self._active
 
     def active(self):
         return self._active and self.use_tls()
