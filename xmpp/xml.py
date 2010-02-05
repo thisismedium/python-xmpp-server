@@ -198,6 +198,31 @@ def clark(obj, ns=None, nsmap=None):
 
     return u'{%s}%s' % (obj[0] or ns, obj[1]) if (obj[0] or ns) else obj[1]
 
+def clark_path(expr, ns=None, nsmap=None):
+    """Expand an XPath expression into an ETXPath expression.
+
+    >>> clark_path('foo/bar', 'baz')
+    u'{baz}foo/{baz}bar'
+    >>> clark_path('/n:frob/{a}mumble/quux/text()', 'urn:D', { 'n': 'urn:N' })
+    u'/{urn:N}frob/{a}mumble/{urn:D}quux/text()'
+    """
+
+    if ns is None and nsmap:
+        ns = nsmap.get(None)
+
+    ## FIXME: This is very brute-force.  Replace with a proper
+    ## tokenizer.  It does not handle attribute names or expressions.
+    return '/'.join(
+        ## The isalpha() check prevents expansion of:
+        ##    {foo}bar
+        ##    [...]
+        ##    ''
+        ##    text()
+        clark(t, ns, nsmap) if (t and t[0].isalpha() and t[-1].isalpha()) else t
+        for t in expr.split('/')
+    )
+
+
 JID = re.compile('([^@/]+)(?:@([^/]+))?(?:/(.+))?$')
 
 def jid(name, host=None, resource=None):

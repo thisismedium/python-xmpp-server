@@ -433,7 +433,6 @@ class TLS(plugin.Feature):
 class SASL(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-sasl'
     TAG = '{%s}mechanisms' % __xmlns__
-    MECHANISM = '{%s}mechanism' % __xmlns__
 
     DEFAULT_MECHANISMS = (sasl.Plain, sasl.DigestMD5)
 
@@ -481,9 +480,11 @@ class SASL(plugin.Feature):
 
     ## ---------- Client ----------
 
+    get_mechanisms = plugin.get_children('mechanism')
+
     def reply(self, feature):
         mechs = dict(self.allowed())
-        for offer in feature.iter(self.MECHANISM):
+        for offer in self.get_mechanisms(feature):
             name = offer.text; mech = mechs.get(name)
             if mech:
                 self.select(name, mech)
@@ -544,8 +545,6 @@ class SASL(plugin.Feature):
 class Bind(plugin.Feature):
     __xmlns__ = 'urn:ietf:params:xml:ns:xmpp-bind'
     TAG = '{%s}bind' % __xmlns__
-    RESOURCE = '{%s}bind/{%s}resource/text()' % (__xmlns__, __xmlns__)
-    JID = '{%s}bind/{%s}jid/text()' % (__xmlns__, __xmlns__)
 
     def __init__(self, resources):
         self.resources = resources
@@ -556,25 +555,28 @@ class Bind(plugin.Feature):
 
     ### ---------- Server ----------
 
+    get_resource = plugin.get_text('bind/resource')
+
     def include(self):
         self.iq('bind', self.new_binding)
         return self.E.bind()
 
     def new_binding(self, iq):
         assert iq.get('type') == 'set'
-        self.jid = self.resources.bind(xml.child(iq, self.RESOURCE), self)
+        self.jid = self.resources.bind(self.get_resource(iq), self)
         self.iq('result', iq, self.E.bind(self.E.jid(self.jid)))
         return self.trigger(StreamBound)
 
     ### ---------- Client ----------
+
+    get_jid = plugin.get_text('bind/jid')
 
     def reply(self, feature):
         return self.iq('set', self.bound, self.E.bind())
 
     def bound(self, iq):
         assert iq.get('type') == 'result'
-        self.jid = self.resources.bound(xml.child(iq, self.JID), self)
-        print 'BOUND', self.jid
+        self.jid = self.resources.bound(self.get_jid(iq), self)
         return self.trigger(StreamBound)
 
 class Session(plugin.Feature):

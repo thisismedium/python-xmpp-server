@@ -7,7 +7,10 @@ from __future__ import absolute_import
 from . import xml, interfaces as i
 from .prelude import *
 
-__all__ = ('bind', 'stanza', 'iq', 'Plugin', 'Feature', 'PluginError')
+__all__ = (
+    'bind', 'stanza', 'iq', 'get_children', 'get_child', 'get_text',
+    'Plugin', 'Feature', 'PluginError'
+)
 
 
 ### Static plugin decorators
@@ -58,8 +61,34 @@ def iq(obj=None, bind=None):
 
     return stanza(obj, bind, '{jabber:client}iq/')
 
+def get_children(expr):
+    """Declare a method that will return a list of Elements matching
+    expr, an XPath expression interpreted according to the Plugin's
+    nsmap."""
+
+    return XPathMethod(expr, lambda x: x)
+
+def get_child(expr, default=None):
+    """Declare a method that will return on Element that matches expr
+    or the default value.  The XPath expression expr is interpreted
+    according to the Plugin's nsmap.'"""
+
+    def make(xpath):
+        def child(elem):
+            found = xpath(elem)
+            return found[0] if found else default
+        return child
+
+    return XPathMethod(expr, make)
+
+def get_text(expr, default=''):
+    """Like get_child(), but return text."""
+
+    return get_child('%s/text()' % expr, default)
+
 BindMethod = namedtuple('BindMethod', 'events method')
 StanzaMethod = namedtuple('StanzaMethod', 'event name prefix method')
+XPathMethod = namedtuple('XPathMethod', 'expr make')
 
 
 ### Plugin Type
@@ -175,8 +204,8 @@ def register(cls, property_name, merge, add, scanned=None):
     return cls
 
 def scan_attr(attr, ns, nsmap):
-    """Find and unbox all of the statically delcared stanza and event
-    bindings."""
+    """Find and unbox all of the statically delcared stanza, event,
+    and xpath bindings."""
 
     events = []; stanzas = []
     for (name, obj) in attr.items():
@@ -190,6 +219,9 @@ def scan_attr(attr, ns, nsmap):
             cname = '%s%s' % (obj.prefix, xml.clark(obj.name or name, ns, nsmap))
             stanzas.append((cname, (obj.event, name)))
             attr[name] = obj.method
+        elif isinstance(obj, XPathMethod):
+            xpath = xml.xpath(xml.clark_path(obj.expr, nsmap=nsmap))
+            attr[name] = staticmethod(obj.make(xpath))
     return (events, stanzas)
 
 def merge_events(groups):
