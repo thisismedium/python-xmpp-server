@@ -54,11 +54,37 @@ class Parser(object):
         self.stop = False
         self.more = False
 
+    def start(self):
+        if self.stop:
+            self.close()
+            self.target.reset()
+            self.stop = False
+        self.parser.feed('')
+        return self
+
     def reset(self):
         self.stop = True
         return self
 
+    def stop_tokenizing(self):
+        if self.rb is not None:
+            if self.rb:
+                self.parser.feed(self.rb)
+            self.rb = None
+            self.feed = self.parser.feed
+        return self
+
     def feed(self, data):
+        ## This method buffers data and carefully feeds tokens from
+        ## the buffer into the parser.  The parser target may reset
+        ## the parser while a particular token is being handled, so if
+        ## all the data is fed into the parser immediately, there may
+        ## be dangling tags that raise an error the next time the
+        ## parser is fed a chunk.
+
+        ## This method is swapped out for self.parser.feed() once the
+        ## core has negotiated its features.
+
         self.rb += data
         self.more = bool(self.rb)
         while self.more:
@@ -68,15 +94,9 @@ class Parser(object):
                 self.start()
         return self
 
-    def start(self):
-        if self.stop:
-            self.close()
-            self.target.reset()
-            self.stop = False
-        self.parser.feed('')
-        return self
-
     def tokenize(self):
+        ## Tokenize a buffer of XML data.  Tokens are opening tags, data
+        ## chunks, and closing tags.
         while self.rb and not self.stop:
             if self.rb.startswith('<'):
                 idx = self.rb.find('>')

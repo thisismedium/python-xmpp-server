@@ -7,52 +7,59 @@ from __future__ import absolute_import
 from . import xml, interfaces as i
 from .prelude import *
 
-__all__ = ('bind', 'stanza', 'Plugin',  'PluginError')
+__all__ = ('bind', 'stanza', 'iq', 'Plugin', 'Feature', 'PluginError')
 
 
 ### Static plugin decorators
 
-def bind(event):
-    """Bind a plugin or method to a certain event.
+def bind(*events):
+    """Bind a plugin to an Event or a method to an Event or stanza.
 
-    Binding a method is a shortcut for self.bind(EventName,
-    self.method) in the plugin initializer.
+    Binding a method is a shortcut for self.bind(kind, self.method) in
+    the plugin initializer.
 
     Binding a plugin (i.e. using bind as a class decorator), activates
     the plugin at a specific time.  Normally plugins are activated at
-    a default time (probably right after authorization)."""
+    a default time (usually after features are negotiated).
+    """
 
     def decorator(obj):
         ## @bind(EventName) class decorator
         if isinstance(obj, type):
-            obj.__activate__ = event
+            obj.__activate__ = events
             return obj
         ## @bind(EventName) method decorator
         else:
-            return BindMethod(event, obj)
+            return BindMethod(events, obj)
     return decorator
 
-def stanza(obj=None, bind=None):
+def stanza(obj=None, bind=None, prefix=''):
     """Declare a stanza handler.
 
     The handler will be installed when the plugin is activated.  If an
     optional EventName is given, wait for this event to install the
-    handler."""
+    handler.
+
+    The prefix parameter is used internally."""
 
     ## @stanza(EventName [, 'element-name'])
-    if isinstance(obj, type) and issubclass(obj, Event):
-        return partial(StanzaMethod, obj, bind)
+    if isinstance(obj, type) and issubclass(obj, i.Event):
+        return partial(StanzaMethod, obj, bind, prefix)
     ## @stanza('element-name' [, EventName])
     elif isinstance(obj, basestring):
-        return partial(StanzaMethod, bind, obj)
+        return partial(StanzaMethod, bind, obj, prefix)
     ## @stanza
     else:
         assert callable(obj), '@stanza must decorate a method.'
-        return StanzaMethod(None, None, obj)
+        return StanzaMethod(None, None, prefix, obj)
 
-BindMethod = namedtuple('BindMethod', 'event method')
+def iq(obj=None, bind=None):
+    """Declare an info query handler."""
 
-StanzaMethod = namedtuple('StanzaMethod', 'event name method')
+    return stanza(obj, bind, '{jabber:client}iq/')
+
+BindMethod = namedtuple('BindMethod', 'events method')
+StanzaMethod = namedtuple('StanzaMethod', 'event name prefix method')
 
 
 ### Plugin Type
@@ -115,9 +122,10 @@ class PluginType(type):
 
     def __new__(mcls, name, bases, attr):
         ns = get_attribute(bases, attr, '__xmlns__', None)
-        nsmap = updated_nsmap(bases, attr)
+        nsmap = updated_nsmap(ns, bases, attr)
         handlers = scan_attr(attr, ns, nsmap)
         cls = type.__new__(mcls, name, bases, attr)
+        cls.E = xml.ElementMaker(namespace=ns, nsmap=nsmap)
         return register_handlers(cls, nsmap, *handlers)
 
     def __call__(cls, state, *args, **kwargs):
@@ -134,9 +142,11 @@ class PluginType(type):
 
         return obj
 
-def updated_nsmap(bases, attr):
+def updated_nsmap(ns, bases, attr):
     base = merge_dicts(pluckattr(bases, '__nsmap__'))
-    return add_dicts(base, attr.get('__nsmap__'))
+    result = add_dicts(base, attr.get('__nsmap__'))
+    result[None] = ns
+    return result
 
 def register_handlers(cls, nsmap, events, stanzas):
     """Register all special handlers in a plugin."""
@@ -172,11 +182,12 @@ def scan_attr(attr, ns, nsmap):
     for (name, obj) in attr.items():
         if isinstance(obj, BindMethod):
             ## event record: (event, method-name)
-            events.append((obj.event, name))
+            for event in obj.events:
+                events.append((event, name))
             attr[name] = obj.method
         elif isinstance(obj, StanzaMethod):
             ## stanza record: (name, (activation-event, method-name))
-            cname = xml.clark(obj.name or name, ns, nsmap)
+            cname = '%s%s' % (obj.prefix, xml.clark(obj.name or name, ns, nsmap))
             stanzas.append((cname, (obj.event, name)))
             attr[name] = obj.method
     return (events, stanzas)
@@ -252,7 +263,11 @@ class CompiledPlugins(i.PluginManager):
     data structures that facilitate run-time plugin use."""
 
     def __init__(self, plugins):
-        self.plugins = plugins
+        ## Plugins may be delcared as a tuple of (plugin, { kwargs
+        ## ... }); start by normalizing the declarations into a list
+        ## of plugins and list of procedures to call to activate the
+        ## plugin.
+        (plugins, activate) = plugin_declarations(plugins)
 
         ## This nsmap can be used to create an ElementMaker that is
         ## aware of the xmlns attributes of the plugins.
@@ -269,11 +284,10 @@ class CompiledPlugins(i.PluginManager):
         ## triggered.  Default plugins are activated explicitly by
         ## client/server code (probably after the stream is
         ## authenticated).
-        (self.special, self.default) = partition_by_activation(plugins)
+        (self.special, self.default) = partition_by_activation(plugins, activate)
 
     def get(self, state, plugin):
-        """Look up a plugin instance in the current
-        ApplicationState."""
+        """Look up a plugin instance in the current State."""
 
         name = self.taxonomy.get(plugin)
         if name is None:
@@ -289,50 +303,67 @@ class CompiledPlugins(i.PluginManager):
 
         return value
 
-    def install(self, core):
+    def install(self, state):
         """Bind "special" plugins to their activation events."""
 
         for (event, group) in self.special.iteritems():
-            state.one(event, thunk(self.activate_group, state, group))
+            state.one(event, partial(self.activate_group, state, group))
         return self
 
-    def activate_default(self, state):
+    def activate(self, state, *args, **kwargs):
         """Activate the default plugins.  This must be done
         explicitly.  See Plugin.activatePlugins()."""
 
-        return self.activate_group(state, self.default)
+        return self.activate_group(state, self.default, *args, **kwargs)
 
-    def activate_group(self, state, group):
+    def activate_group(self, state, group, *args, **kwargs):
         """Activate a group of plugins simultaneously.  The
         state.lock() ensures that plugin initializers cannot produce
         side-effects that break other plugins."""
 
         with state.lock() as state:
-            for (name, plugin) in group:
-                self.activate(state, name, plugin)
+            for (name, make) in group:
+                self.activate_one(state, name, make, args, kwargs)
         return self
 
-    def activate(self, state, name, plugin):
+    def activate_one(self, state, name, make, args, kwargs):
         """Activate a plugin; see Plugin.plugin()."""
 
-        ## Create plugin instance; add it to the state
-        instance = plugin(state)
+        instance = make(state, *args, **kwargs)
         state.set(name, instance)
-
-        ## Activate stanza handlers
-        for (name, event, method) in self.stanzas[plugin]:
-            method = getattr(instance, method)
-            if not event:
-                state.bind_stanza(name, method)
-            else:
-                state.bind(event, thunk(state.bind_stanza, name, method))
-
-        ## Activate event listeners
-        for (event, listeners) in plugin.EVENTS.iteritems():
-            for method in listeners:
-                state.bind(event, getattr(instance, method))
+        activate_plugin(self.stanzas, state, instance)
 
         return self
+
+def activate_plugin(stanzas, state, instance):
+    """Activate a plugin; see Plugin.plugin()."""
+
+    ## Activate stanza handlers
+    for (name, event, method) in stanzas[type(instance)]:
+        method = getattr(instance, method)
+        if not event:
+            state.bind_stanza(name, method)
+        else:
+            state.bind(event, thunk(state.bind_stanza, name, method))
+
+    ## Activate event listeners
+    for (event, listeners) in instance.EVENTS.iteritems():
+        for method in listeners:
+            state.bind(event, getattr(instance, method))
+
+    return instance
+
+def plugin_declarations(declarations):
+    plugins = []; activate = []
+    for obj in declarations:
+        if isinstance(obj, tuple):
+            (plugin, settings) = obj
+            plugins.append(plugin)
+            activate.append(partial(plugin, **settings))
+        else:
+            plugins.append(obj)
+            activate.append(obj)
+    return (plugins, activate)
 
 def plugin_taxonomy(plugins):
     taxonomy = {}
@@ -360,21 +391,14 @@ def plugin_stanzas(plugins):
                 stanzas[plugin].append((name, event, method))
     return stanzas
 
-def partition_by_activation(plugins):
+def partition_by_activation(plugins, activate):
     special = ddict(list); default = []
-    for plugin in plugins:
-        event = plugin.__activate__
-        if event:
-            special[event].append((plugin_name(plugin), plugin))
+    for (plugin, make) in izip(plugins, activate):
+        for event in plugin.__activate__:
+            special[event].append((plugin_name(plugin), make))
         else:
-            default.append((plugin_name(plugin), plugin))
+            default.append((plugin_name(plugin), make))
     return (special, default)
-
-def thunk(proc, *args, **kwargs):
-    """Make a thunk that closes over some arguments and ignores
-    subsequent ones when it's called."""
-
-    return lambda *a, **k: proc(*args, **kwargs)
 
 def merge_nsmaps(plugins):
     """Merge namespace maps for a sequence of plugins together."""
@@ -391,7 +415,7 @@ class Plugin(object):
 
     ## An event on which this plugin is activated.  Don't set this
     ## directly, use @bind as a class decorator.
-    __activate__ = None
+    __activate__ = ()
 
     ## The default xmlns for stanza handlers.
     __xmlns__ = 'jabber:client'
@@ -411,11 +435,79 @@ class Plugin(object):
         self.__core = state.core
         self.__plugins = state.plugins
 
-        self.E = self.__core.E
-
         return self
 
-    ## ---------- Plugins ----------
+    ## ---------- Stream ----------
+
+    def write(self, *args):
+        self.__core.write(*args)
+        return self
+
+    def iq(self, *args, **kwargs):
+        self.__core.iq(*args, **kwargs)
+        return self
+
+    def error(self, *args, **kwargs):
+        self.__core.stanza_error(*args, **kwargs)
+        return self
+
+    def close(self):
+        self.__core.close()
+        return None
+
+    ## ---------- Low-level Stream ----------
+
+    def open_stream(self, *args):
+        self.__core.open_stream(*args)
+        return self
+
+    def use_tls(self):
+        return self.__core.use_tls()
+
+    def starttls(self, *args, **kwargs):
+        self.__core.starttls(*args, **kwargs)
+        return self
+
+    def reset_stream(self):
+        self.__core.reset()
+        ## Resetting a stream destroys this plugin.
+        return None
+
+    def close_stream(self, *args):
+        self.__core.close_stream(*args)
+        ## Closing a stream destroys this plugin.
+        return None
+
+    def stream_error(self, *args, **kwargs):
+        self.__core.stream_error(*args, **kwargs)
+        ## Stream-level errors are not recoverable.
+        return None
+
+    ## ---------- Events ----------
+
+    def bind(self, *args, **kw):
+        dispatch(self, self.__state.bind, self.__state.bind_stanza, *args, **kw)
+        return self
+
+    def one(self, *args, **kw):
+        dispatch(self, self.__state.one, self.__state.one_stanza, *args, **kw)
+        return self
+
+    def unbind(self, *args, **kw):
+        dispatch(self, self.__state.unbind, self.__state.unbind_stanza, *args, **kw)
+        return self
+
+    def trigger(self, event, *args, **kwargs):
+        if xml.is_element(event):
+            self.__state.trigger_stanza(event, *args, **kwargs)
+        else:
+            self.__state.trigger(event, self, *args, **kwargs)
+        return self
+
+    ## ---------- Features and Plugins ----------
+
+    secured = property(lambda s: s.__core.secured)
+    authJID = property(lambda s: s.__core.authJID)
 
     def plugin(self, cls):
         return self.__plugins.get(self.__state, cls)
@@ -424,61 +516,95 @@ class Plugin(object):
         self.__state.activate()
         return self
 
-    ## ---------- Stream ----------
-
-    def write(self, data):
-        self.__core.write(data)
-        return self
-
-    def iq(self, *args, **kwargs):
-        self.__core.iq(*args, **kwargs)
-        return self
-
-    def open_stream(self):
-        self.__core.open_stream()
-        return self
-
-    def reset_stream(self):
-        self.__core.reset()
-        ## Resetting a stream destroys this plugin.
-        return None
-
-    def close_stream(self):
-        self.__core.close_stream()
-        ## Closing a stream destroys this plugin.
-        return None
-
-    def close(self):
-        self.__core.close()
-        return None
-
-    def error(self, *args, **kwargs):
-        self.__core.error(*args, **kwargs)
-        return None
-
-    ## ---------- Events ----------
-
-    def stanza(self, *args, **kwargs):
-        self.__state.bind_stanza(*args, **kwargs)
-        return self
-
-    def bind(self, *args, **kwargs):
-        self.__state.bind(*args, **kwargs)
-        return self
-
-    def one(self, *args, **kwargs):
-        self.__state.one(*args, **kwargs)
-        return self
-
-    def unbind(self, *args, **kwargs):
-        self.__state.unbind(*args, **kwargs)
-        return self
-
-    def trigger(self, event, *args, **kwargs):
-        self.__state.trigger(event, self, *args, **kwargs)
-        return self
-
-    ## ---------- Additional ----------
-
     def routes(self, jid):
         return self.__core.routes(jid)
+
+
+def dispatch(plugin, event, stanza, kind=None, callback=None, **kw):
+    """Dispatch on one or more event/stanza changes to Plugin state."""
+
+    ## method(kind, callback)
+    if isinstance(kind, (basestring, type)):
+        return switch(plugin, event, stanza, kind, callback, **kw)
+    elif callback:
+        raise ValueError('bind(): unexpected second argument')
+
+    ## method([(kind, callback), ...], kind=callback, ...)
+    for (name, val) in chain_items(kind, kw):
+        switch(plugin, event, stanza, name, val)
+
+def switch(plugin, event, stanza, kind, callback, **kw):
+    """Dispatch on one event or stanza change to Plugin state."""
+
+    if isinstance(kind, basestring):
+        kind = xml.clark(kind, plugin.__xmlns__)
+        stanza(kind, callback, **kw)
+    else:
+        event(kind, callback, **kw)
+
+
+### Compiled Features
+
+class CompiledFeatures(i.PluginManager):
+    """Features are less complicated than normal Plugins because they
+    are activated all at once."""
+
+    def __init__(self, features):
+        (features, activate) = plugin_declarations(features)
+        self.stanzas = plugin_stanzas(features)
+        (special, self.default) = partition_by_activation(features, activate)
+        if special:
+            raise ValueError('Features may not be bound to events:', special)
+
+    def install(self, state):
+        return FeatureList(self, state, (f(state) for (_, f) in self.default))
+
+    def activate(self, state, features):
+        for instance in features:
+            yield activate_plugin(self.stanzas, state, instance)
+
+class FeatureList(list):
+    """The core implementation keeps a list of installed features.
+    This list is used to send and respond to the <stream:features>
+    stanza."""
+
+    __slots__ = ('state', 'compiled')
+
+    def __init__(self, compiled, state, *args):
+        super(FeatureList, self).__init__(*args)
+        self.state = state
+        self.compiled = compiled
+
+    def include(self):
+        return (f.include() for f in self.activated() if f.active())
+
+    def active(self):
+        return ((f.TAG, f) for f in self.activated() if f.active())
+
+    def activated(self):
+        return self.compiled.activate(self.state, self)
+
+
+### Feature Base Class
+
+class Feature(Plugin):
+    """A Feature is a special plugin that keeps its state for the
+    lifetime of a connection.  Features are negotiated when a stream
+    is opened."""
+
+    def active(self):
+        """Is this feature currently active?"""
+
+        return False
+
+    def include(self):
+        """Include this feature in the list of features sent by a
+        server after opening a stream.  The result must be an element
+        to include as a child of <stream:mechanisms>."""
+
+        return None
+
+    def reply(self, feature):
+        """Reply to a feature clause received from a server."""
+
+        return None

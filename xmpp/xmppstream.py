@@ -58,7 +58,7 @@ class XMPPHandler(object):
 
     def __call__(self, socket, addr, io_loop, **kwargs):
         stream = readstream.ReadStream(socket, io_loop, **kwargs)
-        self.Core(addr, stream, **self.settings)
+        self.Core(stream, **self.settings)
         return self
 
 class XMPPTarget(object):

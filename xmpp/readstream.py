@@ -51,12 +51,14 @@ class ReadStream(object):
         """Close this stream once the write buffer is emptied and
         optionally run callback."""
 
-        self._close_callback = callback
-        self._reader = None
-        if self._wb:
-            self._write_callback = self.close
-        else:
-            self.close()
+        if self.socket:
+            self._reader = None
+            if callback:
+                self._close_callback = callback
+            if self._wb:
+                self._write_callback = self.close
+            else:
+                self.close()
         return self
 
     def close(self):

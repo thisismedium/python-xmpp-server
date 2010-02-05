@@ -8,14 +8,7 @@ import weakref, random, hashlib
 from . import interfaces as i, xmppstream, xml
 from .prelude import *
 
-__all__ = ('Event', 'State', 'Resources', 'NoRoute')
-
-
-### Events
-
-class Event(object):
-    """Subclass this to declare a new Event.  Use the docstring to
-    describe the event and how it should be used."""
+__all__ = ('State', 'Resources', 'NoRoute')
 
 
 ### State
@@ -41,7 +34,7 @@ class State(object):
         return self
 
     def activate(self):
-        self.plugins.activate_default(self)
+        self.plugins.activate(self)
         return self
 
     def clear(self):
@@ -81,10 +74,15 @@ class State(object):
     def trigger(self, event, *args, **kwargs):
         handlers = self.events.get(event)
         if handlers:
-            for (index, handler) in enumerate(handlers):
-                if isinstance(handler, Once):
-                    del handlers[index]
+            idx = 0; lim = len(handlers)
+            while idx < lim:
+                handler = handlers[idx]
                 self.run(handler, *args, **kwargs)
+                if isinstance(handler, Once):
+                    del handlers[idx]
+                    lim -= 1
+                else:
+                    idx += 1
         return self
 
     ## ---------- Stanzas ----------
@@ -105,9 +103,10 @@ class State(object):
     def one_stanza(self, name, callback, *args, **kwargs):
         return self.bind_stanza(name, Once(callback), *args, **kwargs)
 
-    def unbind_stanza(name):
+    def unbind_stanza(name, callback=None):
         try:
-            del self.stanzas[name]
+            if not callback or self.stanzas[name] is callback:
+                del self.stanzas[name]
         except KeyError:
             pass
         return self
@@ -205,23 +204,23 @@ class Resources(object):
         self._bound = {}
         self._routes = ddict(set)
 
-    def bind(self, name, core):
+    def bind(self, name, feature):
         """Create a fresh binding."""
 
         resource = '%s-%d' % (name or 'Resource', random.getrandbits(32))
-        jid = xml.jid(core.authJID, resource=md5(resource))
-        return self._bind(core, core.authJID, jid)
+        jid = xml.jid(feature.authJID, resource=md5(resource))
+        return self._bind(feature, feature.authJID, jid)
 
-    def bound(self, jid, core):
-        """Register a binding created for this core."""
+    def bound(self, jid, feature):
+        """Register a binding created for this feature."""
 
-        return self._bind(core, xml.jid(jid, resource=False), jid)
+        return self._bind(feature, xml.jid(jid, resource=False), jid)
 
-    def _bind(self, core, bare, jid):
+    def _bind(self, feature, bare, jid):
         ## Bindings are made with weak references to keep the
-        ## book-keeping overhead in the core to a minimum.
-        wr = weakref.KeyedRef(core, self._remove, jid)
-        if self._bound.setdefault(jid, wr)() is not core:
+        ## book-keeping overhead in the core and plugins to a minimum.
+        wr = weakref.KeyedRef(feature, self._remove, jid)
+        if self._bound.setdefault(jid, wr)() is not feature:
             raise i.IQError('cancel', 'conflict')
         self._routes[bare].add(jid)
         return jid

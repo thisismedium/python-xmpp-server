@@ -12,7 +12,7 @@ __all__ = (
     'Sequence', 'deque', 'first', 'chain', 'groupby', 'imap', 'izip', 'ichain',
     'ifilter', 'filter', 'append', 'extend',
     'Mapping', 'ddict', 'namedtuple', 'items', 'keys', 'values', 'chain_items',
-    'setitems', 'update', 'setdefault',
+    'get', 'setitems', 'update', 'setdefault', 'ipop', 'pop',
     'partial', 'wraps', 'thunk', 'contextmanager'
 )
 
@@ -97,6 +97,11 @@ def setitems(obj, items=None, **kwargs):
         obj[key] = val
     return obj
 
+def get(obj, key, default=None):
+    if hasattr(obj, 'get'):
+        return obj.get(key, default)
+    return next((v for (k, v) in obj if k == key), default)
+
 def update(obj, *args, **kwargs):
     obj.update(*args, **kwargs)
     return obj
@@ -105,6 +110,16 @@ def setdefault(obj, items=None, **kwargs):
     for (key, val) in chain_items(items, kwargs):
         obj.setdefault(key, val)
     return obj
+
+def ipop(obj, *keys, **kwargs):
+    default = kwargs.get('default')
+    return ((k, obj.pop(k, default)) for k in keys)
+
+def pop(obj, *keys, **kwargs):
+    default = kwargs.get('default')
+    if len(keys) == 1:
+        return obj.pop(keys[0], default)
+    return (obj.pop(k, default) for k in keys)
 
 
 ### Procedures
@@ -122,6 +137,14 @@ class thunk(object):
         self.func = func
         self.args = args
         self.keywords = keywords
+
+    def __repr__(self):
+        return '<%s %r args=%r kwargs=%r>' % (
+            type(self).__name__,
+            self.func,
+            self.args,
+            self.keywords
+        )
 
     def __call__(self, *args, **kwargs):
         return self.func(*self.args, **self.keywords)

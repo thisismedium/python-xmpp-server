@@ -7,9 +7,19 @@ from __future__ import absolute_import
 import abc, re
 
 __all__ = (
-    'CoreInterface', 'PluginManager',
+    'Event', 'CoreInterface', 'PluginManager',
     'StreamError', 'StanzaError', 'IQError'
 )
+
+
+### Events
+
+class Event(object):
+    """Subclass this to declare a new Event.  Use the docstring to
+    describe the event and how it should be used."""
+
+
+### Core
 
 class CoreInterface(object):
     """XMPP Core interface.  See xmppstream.py and core.py."""
@@ -46,11 +56,11 @@ class PluginManager(object):
     }
 
     @abc.abstractmethod
-    def reset(self, core):
+    def install(self, state):
         """Install "special" plugins into the current state."""
 
     @abc.abstractmethod
-    def activate_default(self, state):
+    def activate(self, state):
         """Activate normal plugins."""
 
 

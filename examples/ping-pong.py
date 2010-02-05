@@ -72,9 +72,6 @@ class Client(xmpp.Plugin):
 
     def __init__(self):
         self.pongs = 0
-
-    @xmpp.bind(xmpp.SessionStarted)
-    def send_ping(self):
         self.plugin(PingPong).send_ping()
 
     @xmpp.bind(ReceivedPong)
@@ -96,6 +93,7 @@ class Stream(object):
             del cls.SCHEDULE[0]
             if callback:
                 callback(data)
+                done and done()
             elif isinstance(data, float) and data < time.time():
                 if cls.SCHEDULE:
                     cls.SCHEDULE.append((callback, data, done))
@@ -117,7 +115,7 @@ class Stream(object):
         self.io = self.IO()
 
         print '%s: OPEN' % self.name
-        self.target = app.Core(('127.0.0.1', 0), self, **app.settings)
+        self.target = app.Core(self, **app.settings)
 
     def read(self, callback):
         self.reader = callback
@@ -131,7 +129,7 @@ class Stream(object):
         self.closed = callback
 
     def write(self, data, callback=None):
-        print '%s:' % self.name, data
+        # print '%s:' % self.name, data
         if self.dest:
             self.SCHEDULE.append((self.dest, data, callback))
         return self
@@ -143,23 +141,24 @@ class Stream(object):
 if __name__ == '__main__':
     client = xmpp.Client({
         'plugins': [PingPong, Client],
-        'auth': xmpp.ClientAuth('xmpp', 'example.net', 'user@example.net', 'secret'),
-        'resources': xmpp.state.Resources()
+        'host': 'example.net',
+        'username': 'user@example.net',
+        'password': 'secret'
     })
 
     server = xmpp.Server({
         'plugins': [PingPong],
-        'auth': xmpp.ServerAuth('xmpp', 'example.net', { 'user@example.net': 'secret' }),
-        'resources': xmpp.state.Resources(),
+        'host': 'example.net',
+        'users': { 'user@example.net': 'secret' },
         'certfile': os.path.join(os.path.dirname(__file__), 'certs/self.crt'),
         'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
     })
 
-    CP = Stream('C', client, lambda d: SP.reader(d))
-    SP = Stream('S', server, lambda d: CP.reader(d))
-    Stream.loop()
+    # CP = Stream('C', client, lambda d: SP.reader(d))
+    # SP = Stream('S', server, lambda d: CP.reader(d))
+    # Stream.loop()
 
-    # SP = xmpp.TCPServer(server).bind('127.0.0.1', '9000')
-    # CP = xmpp.TCPClient(client).connect('127.0.0.1', '9000')
-    # xmpp.start([SP, CP])
+    SP = xmpp.TCPServer(server).bind('127.0.0.1', '9000')
+    CP = xmpp.TCPClient(client).connect('127.0.0.1', '9000')
+    xmpp.start([SP, CP])
 
