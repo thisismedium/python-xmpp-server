@@ -30,9 +30,11 @@ class ChatServer(xmpp.Plugin):
         pass
 
 if __name__ == '__main__':
+    
+    #create a server with 2 users: user1@example.net and user2@example.net
     server = xmpp.Server({
         'plugins': [ChatServer],
-        'auth': xmpp.ServerAuth('xmpp', 'example.net', { 'weaver': 'secret', 'rob': 'secret' }),
+        'auth': xmpp.ServerAuth('xmpp', 'example.net', { 'user1': 'password1', 'user2': 'password2' }),
         'resources': xmpp.state.Resources()
         # 'certfile': os.path.join(os.path.dirname(__file__), 'certs/self.crt'),
         # 'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
