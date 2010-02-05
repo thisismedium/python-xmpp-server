@@ -509,6 +509,14 @@ class Plugin(object):
         self.__core.close()
         return None
 
+    def add_timeout(self, *args):
+        self.__core.add_timeout(*args)
+        return self
+
+    def clear_timeout(self, *args):
+        self.__core.remove_timeout(*args)
+        return self
+
     ## ---------- Low-level Stream ----------
 
     def open_stream(self, *args):

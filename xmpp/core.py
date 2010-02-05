@@ -74,8 +74,12 @@ class Core(i.CoreInterface):
         self.authJID = bindings.jid
         self.resources = bindings.resources
 
-    def timeout(self, delay, callback):
+    def add_timeout(self, delay, callback):
         self.stream.io.add_timeout(time.time() + delay, callback)
+        return self
+
+    def remove_timeout(self, callback):
+        self.stream.io.remove_timeout(callback)
         return self
 
     ### ---------- Incoming Stream ----------
