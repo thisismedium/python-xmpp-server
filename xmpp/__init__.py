@@ -4,6 +4,7 @@ from .aio import *
 from .readstream import *
 from .xmppstream import *
 from .plugin import *
+from .features import *
 from .state import *
 from .core import *
 from .application import *

@@ -17,7 +17,7 @@ These shortcuts process settings into the form above.
 
 from __future__ import absolute_import
 import sasl, socket
-from . import core, xmppstream, plugin, state
+from . import core, xmppstream, plugin, state, features
 from .prelude import *
 
 __all__ = ('Server', 'Client', 'Application', 'ServerAuth', 'ClientAuth')
@@ -65,12 +65,12 @@ def server_features(settings):
     auth = server_auth(settings)
     resources = default_resources(settings)
     return (
-        (core.StartTLS, dict(
+        (features.StartTLS, dict(
             ipop(settings, 'certfile', 'keyfile'),
             server_side=True)),
-        (core.Mechanisms, dict(ipop(settings, 'mechanisms'), auth=auth)),
-        (core.Bind, dict(resources=resources)),
-        core.Session
+        (features.Mechanisms, dict(ipop(settings, 'mechanisms'), auth=auth)),
+        (features.Bind, dict(resources=resources)),
+        features.Session
     )
 
 def server_auth(settings):
@@ -90,7 +90,7 @@ def server_auth(settings):
     return auth
 
 def default_resources(settings):
-    return pop(settings, 'resources') or state.Resources()
+    return pop(settings, 'resources') or features.Resources()
 
 def ServerAuth(serv_type, host, users):
 
@@ -128,10 +128,10 @@ def client_features(settings):
     auth = client_auth(settings)
     resources = default_resources(settings)
     return (
-        core.StartTLS,
-        (core.Mechanisms, dict(ipop(settings, 'mechanisms'), auth=auth)),
-        (core.Bind, dict(resources=resources)),
-        core.Session
+        features.StartTLS,
+        (features.Mechanisms, dict(ipop(settings, 'mechanisms'), auth=auth)),
+        (features.Bind, dict(resources=resources)),
+        features.Session
     )
 
 def client_auth(settings):

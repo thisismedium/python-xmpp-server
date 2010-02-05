@@ -4,11 +4,10 @@
 """state -- xmpp connection state and event management"""
 
 from __future__ import absolute_import
-import weakref, random, hashlib
-from . import interfaces as i, xmppstream, xml
+from . import interfaces as i
 from .prelude import *
 
-__all__ = ('State', 'Resources', 'NoRoute')
+__all__ = ('State', )
 
 
 ### State
@@ -179,91 +178,3 @@ class NoPlugins(i.PluginManager):
     def activate_default(self, state):
         pass
 
-
-### Resources
-
-class NoRoute(Exception):
-    """Routes are used to deliver messages.  This exception is raised
-    when no routes can be found for a particular jid."""
-
-class Resources(object):
-    """Track resource bindings for a node.
-
-    See also: core.Bind
-    """
-
-    def __init__(self):
-
-        ## This technique is derived from weakref.WeakValueDictionary
-        def remove(wr, selfref=weakref.ref(self)):
-            self = selfref()
-            if self is not None:
-                self.unbind(wr.key)
-        self._remove = remove
-
-        self._bound = {}
-        self._routes = ddict(set)
-
-    def bind(self, name, feature):
-        """Create a fresh binding."""
-
-        resource = '%s-%d' % (name or 'Resource', random.getrandbits(32))
-        jid = xml.jid(feature.authJID, resource=md5(resource))
-        return self._bind(feature, feature.authJID, jid)
-
-    def bound(self, jid, feature):
-        """Register a binding created for this feature."""
-
-        return self._bind(feature, xml.jid(jid, resource=False), jid)
-
-    def _bind(self, feature, bare, jid):
-        ## Bindings are made with weak references to keep the
-        ## book-keeping overhead in the core and plugins to a minimum.
-        wr = weakref.KeyedRef(feature, self._remove, jid)
-        if self._bound.setdefault(jid, wr)() is not feature:
-            raise i.IQError('cancel', 'conflict')
-        self._routes[bare].add(jid)
-        return jid
-
-    def unbind(self, jid):
-        """Destroy a registered binding."""
-
-        del self._bound[jid]
-        bare = xml.jid(jid, resource=False)
-        routes = self._routes.get(bare)
-        if routes:
-           if len(routes) > 1:
-               routes.remove(jid)
-           else:
-               del self._routes[bare]
-        return self
-
-    def routes(self, jid):
-        """Produce a sequence of routes to the given jid.
-
-        Routes are used to deliver messaged.  A full jid has only one
-        route; a bare jid may have multiple routes.  If there are no
-        routes found, a NoRoutes exception is raised."""
-
-        bound = self._bound
-
-        ## Only one route for a full JID
-        if xml.is_full_jid(jid):
-            wr = bound.get(jid)
-            if wr is None:
-                raise NoRoute(jid)
-            return ((jid, wr()),)
-
-        ## A bare JID may map to multiple full JIDs.
-        routes = self._routes.get(jid)
-        if routes:
-            routes = tuple(
-                (w.key, w())
-                for w in ifilter(bound.get(j) for j in routes)
-            )
-        if not routes:
-            raise NoRoute(jid)
-        return routes
-
-def md5(data):
-    return hashlib.md5(data).hexdigest()
