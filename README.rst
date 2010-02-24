@@ -31,7 +31,7 @@ MacPorts, for example::
 
 To install python-sasl_::
 
-  git git://github.com/thisismedium/python-sasl.git
+  git clone git://github.com/thisismedium/python-sasl.git
   cd python-sasl
   python setup.py build
   sudo python setup.py install
