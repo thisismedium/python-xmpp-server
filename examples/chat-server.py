@@ -24,9 +24,8 @@ class ChatServer(xmpp.Plugin):
         for (to, route) in self.routes(elem.get('to')):
             route.write(elem)
 
-
     @xmpp.stanza('presence')
-    def presense(self, elem):
+    def presence(self, elem):
         pass
 
 if __name__ == '__main__':
