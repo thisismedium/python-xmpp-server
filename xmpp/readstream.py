@@ -151,6 +151,7 @@ class ReadStream(object):
         while self._wb:
             try:
                 sent = self.socket.send(self._wb)
+                ## print 'wrote!', self._wb[:sent]
                 self._wb = self._wb[sent:]
             except aio.SocketError as exc:
                 if aio.would_block(exc):

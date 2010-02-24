@@ -226,7 +226,9 @@ class Core(i.CoreInterface):
         })
         if len(elem) > 0:
             stanza.append(elem[0])
-        return self.write(append(stanza, error))
+        stanza.append(error)
+
+        return self.write(stanza)
 
     ### ---------- Features ----------
 
@@ -330,7 +332,7 @@ class Core(i.CoreInterface):
     def _read(self, data):
         if not self.stream:
             return
-
+        ## print 'read!', repr(data)
         try:
             self.parser.feed(data)
         except i.StreamError as exc:
