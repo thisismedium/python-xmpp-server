@@ -5,12 +5,12 @@
 
 from __future__ import absolute_import
 import socket, ssl, select, errno, logging, fcntl
-from tornado import ioloop
+from tornado.ioloop import IOLoop
 
 __all__ = (
     'TCPServer', 'TCPClient', 'SocketError', 'would_block', 'in_progress',
     'starttls', 'is_ssl',
-    'loop', 'start', 'IOLoop'
+    'loop', 'start'
 )
 
 class TCPServer(object):
@@ -164,20 +164,20 @@ def in_progress(exc):
 
 ### TLS
 
-def starttls(socket, handler, events, io=None, success=None, failure=None, **options):
+def starttls(socket, success=None, failure=None, io=None, **options):
     """Wrap an active socket in an SSL socket."""
 
     ## Default Options
 
     options.setdefault('do_handshake_on_connect', False)
-    options.setdefault('ssl_version', ssl.PROTOCOL_TLSv1)
+    options.setdefault('ssl_version', ssl.PROTOCOL_SSLv23)
 
     ## Handlers
 
     def done():
         """Handshake finished successfully."""
 
-        io.set_handler(wrapped.fileno(), handler, events)
+        io.remove_handler(wrapped.fileno())
         success and success(wrapped)
 
     def error():
@@ -207,22 +207,22 @@ def starttls(socket, handler, events, io=None, success=None, failure=None, **opt
             elif exc.args[0] == ssl.SSL_ERROR_WANT_WRITE:
                 new_state |= io.WRITE
             else:
-                raise
+                logging.exception('starttls: caught exception during handshake')
+                error()
 
         if new_state != state[0]:
             state[0] = new_state
             io.update_handler(fd, new_state)
 
     ## set up handshake state; use a list as a mutable cell.
-    io = io or ioloop.IOLoop.instance()
+    io = io or loop()
     state = [io.ERROR]
 
     ## Wrap the socket; swap out handlers.
+    io.remove_handler(socket.fileno())
     wrapped = SSLSocket(socket, **options)
     wrapped.setblocking(0)
-    if wrapped.fileno() != socket.fileno():
-        io.remove_handler(socket.fileno())
-    io.set_handler(wrapped.fileno(), handshake, state[0])
+    io.add_handler(wrapped.fileno(), handshake, state[0])
 
     ## Begin the handshake.
     handshake(wrapped.fileno(), 0)
@@ -290,7 +290,10 @@ class SSLSocket(ssl.SSLSocket):
 ### IO Loop
 
 def loop():
-    return IOLoop.instance()
+    if not hasattr(IOLoop, '_instance'):
+        poll = _KQueue() if hasattr(select, 'kqueue') else None
+        IOLoop._instance = IOLoop(poll)
+    return IOLoop._instance
 
 def start(services=(), io=None):
     """Start an event loop.  If services are given, start them before
@@ -325,104 +328,48 @@ def start(services=(), io=None):
 
 ### Pending bugfix
 
-## Address some issues with IOLoop.add_handler() and ioloop._KQueue.
-## This can go away if the patch is accepted for Issue 59
-## <http://github.com/facebook/tornado/issues/issue/59>.
-
-class IOLoop(ioloop.IOLoop):
-    """Extend the add_handler() method to become set_handler()."""
-
-    def add_handler(self, fd, handler, events):
-        return self.set_handler(fd, handler, events)
-
-    def set_handler(self, fd, handler, events):
-        """This checks to see whether a handler already exists to
-        avoid an OSError from _EPoll and to preserve internal _KQueue
-        state."""
-
-        if fd in self._handlers:
-            self._handlers[fd] = handler
-            self._impl.modify(fd, events | self.ERROR)
-        else:
-            self._handlers[fd] = handler
-            self._impl.register(fd, events | self.ERROR)
-
 class _KQueue(object):
-    """A kqueue-based event loop for BSD/Mac systems.
-
-    This implementation tracks activation records for active
-    descriptors and which descriptors are waiting for a WRITE event.
-    This allows poll() to simulate WRITE events when a descriptor is
-    writable, but kqueue.control() has previously signaled a WRITE and
-    will not re-signal until something changes about the
-    descriptor."""
-
-    class Active(object):
-        """A file descriptor activation record."""
-        __slots__ = ('filter', 'events')
-
-        def __init__(self, events, filter=0):
-            self.events = events  # IOLoop events
-            self.filter = filter  # Last filter received from kqueue.control()
-
-        def modify(self, events):
-            self.events = events
-            return self
-
+    """A kqueue-based event loop for BSD/Mac systems."""
     def __init__(self):
         self._kqueue = select.kqueue()
-        self._active = {}         # Mapping of <fd, Active> items
-        self._writers = set()     # Track fds that want to write
+        self._active = {}
 
     def register(self, fd, events):
-        self._active[fd] = self.control(fd, self.Active(events))
+        self._control(fd, events, select.KQ_EV_ADD)
+        self._active[fd] = events
 
     def modify(self, fd, events):
-        self.control(fd, self._active[fd].modify(events))
+        self.unregister(fd)
+        self.register(fd, events)
 
     def unregister(self, fd):
-        self.control(fd, self._active.pop(fd), select.KQ_EV_DELETE)
-        self._writers.discard(fd)
+        events = self._active.pop(fd)
+        self._control(fd, events, select.KQ_EV_DELETE)
 
-    def control(self, fd, active, *flags):
-        kevent = select.kevent(fd, self.filter(active.events), *flags)
-        self._kqueue.control([kevent], 0)
-        if active.events & IOLoop.WRITE:
-            self._writers.add(fd)
-        else:
-            self._writers.discard(fd)
-        return active
-
-    def filter(self, events):
-        state = 0
+    def _control(self, fd, events, flags):
+        kevents = []
         if events & IOLoop.WRITE:
-            state |= select.KQ_FILTER_WRITE
-        if events & IOLoop.READ or state == 0:
-            state |= select.KQ_FILTER_READ
-        return state
+            kevents.append(select.kevent(
+                    fd, filter=select.KQ_FILTER_WRITE, flags=flags))
+        if events & IOLoop.READ or not kevents:
+            # Always read when there is not a write
+            kevents.append(select.kevent(
+                    fd, filter=select.KQ_FILTER_READ, flags=flags))
+        # Even though control() takes a list, it seems to return EINVAL
+        # on Mac OS X (10.6) when there is more than one event in the list.
+        for kevent in kevents:
+            self._kqueue.control([kevent], 0)
 
     def poll(self, timeout):
         kevents = self._kqueue.control(None, 1000, timeout)
         events = {}
-
         for kevent in kevents:
             fd = kevent.ident
             flags = 0
-            if kevent.filter & select.KQ_FILTER_READ:
-                flags |= IOLoop.READ
-            if kevent.filter & select.KQ_FILTER_WRITE:
-                flags |= IOLoop.WRITE
+            if kevent.filter == select.KQ_FILTER_READ:
+                events[fd] = events.get(fd, 0) | IOLoop.READ
+            if kevent.filter == select.KQ_FILTER_WRITE:
+                events[fd] = events.get(fd, 0) | IOLoop.WRITE
             if kevent.flags & select.KQ_EV_ERROR:
-                flags |= IOLoop.ERROR
-            try:
-                self._active[fd].filter = events[fd] = flags
-            except KeyError:
-                ## Caught some cruft; remove the filter.
-                kevent = select.kevent(fd, kevent.filter, select.KQ_EV_DELETE)
-                self._kqueue.control([kevent], 0)
-
-        for fd in self._writers:
-            if fd not in events and self._active[fd].events & IOLoop.WRITE:
-                events[fd] = IOLoop.WRITE
-
-        return events
+                events[fd] = events.get(fd, 0) | IOLoop.ERROR
+        return events.items()

@@ -89,6 +89,7 @@ class ReadStream(object):
 
         def success(socket):
             self.socket = socket
+            self.io.add_handler(socket.fileno(), self._handle, self._state)
             callback and callback()
 
         def failure(socket):
@@ -97,12 +98,7 @@ class ReadStream(object):
 
         ## Wrap the socket; give startttls() control until the
         ## handshake is finished.
-        aio.starttls(
-            self.socket, self._handle, self._state, self.io,
-            success=success,
-            failure=failure,
-            **options
-        )
+        aio.starttls(self.socket, success, failure, self.io, **options)
 
         ## Temporarily set this to None so _handle() doesn't
         ## self.io.update_handler()
