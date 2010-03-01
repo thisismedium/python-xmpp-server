@@ -298,7 +298,10 @@ class Core(i.CoreInterface):
         try:
             self.state.trigger_stanza(name, elem)
         except i.StreamError as exc:
-            log.exception('Caught StreamError while dispatching %r.', name)
+            log.debug(
+                'Caught StreamError while dispatching %r.', name,
+                exc_info=True
+            )
             self.stanza_error(elem, 'cancel', 'feature-not-implemented')
 
     def iq(self, kind, elem_or_callback, *data):
