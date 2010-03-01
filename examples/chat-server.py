@@ -34,7 +34,7 @@ if __name__ == '__main__':
     ## user2@example.net.
     server = xmpp.Server({
         'plugins': [ChatServer],
-        'host': 'example.net',
+        'host': 'localhost',
         'users': { 'user1': 'password1', 'user2': 'password2' },
         'certfile': os.path.join(os.path.dirname(__file__), 'certs/self.crt'),
         'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
