@@ -4,7 +4,7 @@
 """features -- XMPP stream features"""
 
 from __future__ import absolute_import
-import sasl, weakref, random, hashlib, base64, logging
+import sasl, weakref, random, hashlib, base64
 from . import plugin, xml, interfaces as i
 from .prelude import *
 
@@ -108,7 +108,7 @@ class Mechanisms(plugin.Feature):
         Mech = get(self.allowed(), elem.get('mechanism'))
         if not Mech:
             return self.failure('invalid-mechanism')
-        logging.debug('Begin mechanism: %r.', Mech)
+        log.debug('Begin mechanism: %r.', Mech)
         state = Mech(self.auth).challenge()
         if not state.data and elem.text:
             return self.challenge_loop(state, elem)
@@ -116,7 +116,7 @@ class Mechanisms(plugin.Feature):
             return self.issue_challenge(state)
 
     def challenge_loop(self, state, elem):
-        logging.debug('SASL challenge-loop: %r %r', state, elem.text)
+        log.debug('SASL challenge-loop: %r %r', state, elem.text)
         state = state(self.decode(elem.text))
         if state.failure():
             return self.abort()
@@ -192,7 +192,7 @@ class Mechanisms(plugin.Feature):
         return self.close()
 
     def terminate(self, elem):
-        logging.error('Terminating SASL negotiation: %r.', xml.tostring(elem))
+        log.error('Terminating SASL negotiation: %r.', xml.tostring(elem))
         return self.close()
 
 
