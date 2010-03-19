@@ -100,13 +100,17 @@ def ServerAuth(serv_type, host, users):
     def password():
         raise NotImplementedError
 
+    def get_host():
+        return host
+
     return sasl.SimpleAuth(
         sasl.DigestMD5Password,
         users,
         user,
         password,
         lambda: serv_type,
-        lambda: host
+        get_host,
+        realm=get_host
     )
 
 
