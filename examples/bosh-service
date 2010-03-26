@@ -1,0 +1,9 @@
+#!/bin/sh
+
+## Run this script to start the example XMPP service and a Punjab BOSH
+## server, then visit <http://localhost:5280/> in your browser.
+
+twistd -ny _bosh.tac &
+twistpid="$!"
+trap "kill $twistpid" TERM INT
+python _bosh.py

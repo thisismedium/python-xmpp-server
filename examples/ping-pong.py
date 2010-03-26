@@ -1,4 +1,4 @@
-## Copyright (c) 2009, Coptix, Inc.  All rights reserved.
+## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
 ## See the LICENSE file for license terms and warranty disclaimer.
 
 """ping-pong -- a ping/pong client and server

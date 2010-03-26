@@ -1,0 +1,84 @@
+@import url('reset-fonts-grids.css');
+@import url('base.css');
+
+html {
+    height: 100%;
+}
+
+#doc {
+    text-align: left;
+    height: 100%;
+    font-size: 16px;
+    width: 750px;    
+}
+
+h1, h2 {
+    margin: 0.5em 0;
+    font-weight: bold;
+}
+
+h1 {
+    font-size: 1.5em;
+}
+
+h2 {
+    font-size: 1.1em;
+}
+
+#hd {
+    margin: 2em 0;
+}
+
+#people {
+    background-color: #ddd;
+    width: 100%;
+    margin: 0.5em 0;
+    cursor: pointer;
+}
+
+#people tr:nth-child(even) {
+    background-color: #eee;
+}
+
+#people tr:hover {
+    background-color: #ccc;
+}
+
+#people .template {
+    display: none;
+}
+
+#people th {
+    font-weight: bold;
+    border-bottom: 1px solid black;
+    background-color: #aaa;
+}
+
+#people th, #people td {
+    padding: 0.5em;
+}
+
+#edit {
+    margin: 1em 0;
+    width: 100%;
+    display: none;
+}
+
+.field {
+    margin-bottom: 1em;
+}
+
+label {
+    font-size: 0.8em;
+    display: block;
+    font-weight: bold
+}
+
+.string > input {
+    width: 100%;
+}
+
+.text > textarea {
+    width: 100%;
+    height: 5em;
+}

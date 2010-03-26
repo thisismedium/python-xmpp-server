@@ -1,0 +1,59 @@
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">
+<html xmlns="http://www.w3.org/1999/xhtml">
+<head>
+  <title>Example XMPP Service</title>
+  <link rel="stylesheet" type="text/css" href="directory.css" />
+  <script type="text/javascript" src="http://ajax.googleapis.com/ajax/libs/jquery/1.4.2/jquery.min.js"></script>
+  <script type="text/javascript" src="strophe.js"></script>
+  <script type="text/javascript" src="json2.js"></script>
+  <script type="text/javascript" src="directory.js"></script>
+</head>
+<body id="doc">
+
+  <div id="hd">
+    <h1>XMPP Directory</h1>
+    <p>This example demonstrates how to use XMPP with BOSH instead of
+      an AJAX web service.  Update the directory by clicking on people
+      to edit them or click the "+" button.</p>
+  </div>
+
+  <div id="bd">
+
+    <h2>People</h2>
+    <table id="people">
+      <tr class="headers"><th>Name</th><th>Email</th><th>Address</th></tr>
+      <tr class="template">
+        <td class="name">Somebody</td>
+        <td class="email">somebody@example.net</td>
+        <td class="address">1 Circle Pkwy New York, NY</td>
+      </tr>
+    </table>
+    <input type="button" value="+" id="add-person" />
+
+    <form id="edit">
+      <h2 id="action">Editing</h2>
+      <input type="hidden" name="rowid" value="" />
+
+      <div class="field string">
+        <label for="name-field">Name:</label>
+        <input type="text" name="name" id="name-field" />
+      </div>
+      <div class="field string">
+        <label for="email-field">Email:</label>
+        <input type="text" name="email" id="email-field" />
+      </div>
+      <div class="field text">
+        <label for="address-field">Address:</label>
+        <textarea name="address" id="address-field"></textarea>
+      </div>
+      <div class="buttons">
+        <input type="submit" value="Save" />
+      </div>
+    </form>
+
+  </div>
+
+  <div id="ft"></div>
+
+</body>
+</html>
