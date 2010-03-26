@@ -1,3 +1,6 @@
+## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
+## See the LICENSE file for license terms and warranty disclaimer.
+
 """_bosh.py -- demonstrate how to use XMPP instead of a web service.
 
 To run this example, use the `bosh-service' script.
@@ -6,27 +9,6 @@ To run this example, use the `bosh-service' script.
 import os, sys, json, xmpp, base64, sqlite3, contextlib as ctx
 from md import collections as coll
 from xmpp import xml
-
-def main():
-    server = xmpp.Server({
-        'plugins': [(Directory, { 'db': setup_db() })],
-        'users': { 'user': 'secret' },
-        'host': 'localhost'
-    })
-    print 'Waiting for clients...'
-    xmpp.start([xmpp.TCPServer(server).bind('127.0.0.1', 5222)])
-
-def setup_db():
-    db = sqlite3.connect(':memory:')
-    db.row_factory = sqlite3.Row
-    with ctx.closing(db.cursor()) as cursor:
-        cursor.execute('''CREATE TABLE people (
-            name TEXT,
-            email TEXT,
-            address TEXT
-        )''')
-        db.commit()
-    return db
 
 class Directory(xmpp.Plugin):
     """A simple directory of people."""
@@ -97,6 +79,27 @@ class Directory(xmpp.Plugin):
             attr,
             base64.b64encode(data)
         ))
+
+def main():
+    server = xmpp.Server({
+        'plugins': [(Directory, { 'db': setup_db() })],
+        'users': { 'user': 'secret' },
+        'host': 'localhost'
+    })
+    print 'Waiting for clients...'
+    xmpp.start([xmpp.TCPServer(server).bind('127.0.0.1', 5222)])
+
+def setup_db():
+    db = sqlite3.connect(':memory:')
+    db.row_factory = sqlite3.Row
+    with ctx.closing(db.cursor()) as cursor:
+        cursor.execute('''CREATE TABLE people (
+            name TEXT,
+            email TEXT,
+            address TEXT
+        )''')
+        db.commit()
+    return db
 
 if __name__ == '__main__':
     main()
