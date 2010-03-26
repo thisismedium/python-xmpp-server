@@ -219,12 +219,15 @@ class Bind(plugin.Feature):
     def new_binding(self, iq):
         assert iq.get('type') == 'set'
         self.jid = self.resources.bind(self.get_resource(iq), self)
-        self.iq('result', iq, self.E.bind(self.E.jid(self.jid)))
+        self.iq('result', iq, self.E.bind(self.E.jid(unicode(self.jid))))
         return self.trigger(StreamBound)
 
     ### ---------- Client ----------
 
-    get_jid = plugin.get_text('bind/jid')
+    _get_jid = plugin.get_text('bind/jid')
+
+    def get_jid(self, obj):
+        return xml.jid(self._get_jid(obj))
 
     def reply(self, feature):
         return self.iq('set', self.bound, self.E.bind())
@@ -257,33 +260,32 @@ class Resources(object):
 
         resource = '%s-%d' % (name or 'Resource', random.getrandbits(32))
         jid = xml.jid(feature.authJID, resource=md5(resource))
-        return self._bind(feature, feature.authJID, jid)
+        return self._bind(feature, jid)
 
     def bound(self, jid, feature):
         """Register a binding created for this feature."""
 
-        return self._bind(feature, xml.jid(jid, resource=False), jid)
+        return self._bind(feature, jid)
 
-    def _bind(self, feature, bare, jid):
+    def _bind(self, feature, jid):
         ## Bindings are made with weak references to keep the
         ## book-keeping overhead in the core and plugins to a minimum.
         wr = weakref.KeyedRef(feature, self._remove, jid)
         if self._bound.setdefault(jid, wr)() is not feature:
             raise i.IQError('cancel', 'conflict')
-        self._routes[bare].add(jid)
+        self._routes[jid.bare].add(jid)
         return jid
 
     def unbind(self, jid):
         """Destroy a registered binding."""
 
         del self._bound[jid]
-        bare = xml.jid(jid, resource=False)
-        routes = self._routes.get(bare)
+        routes = self._routes.get(jid.bare)
         if routes:
            if len(routes) > 1:
                routes.remove(jid)
            else:
-               del self._routes[bare]
+               del self._routes[jid.bare]
         return self
 
     def routes(self, jid):
@@ -303,7 +305,7 @@ class Resources(object):
             return ((jid, wr()),)
 
         ## A bare JID may map to multiple full JIDs.
-        routes = self._routes.get(jid)
+        routes = self._routes.get(jid.bare)
         if routes:
             routes = tuple(
                 (w.key, w())
@@ -332,6 +334,7 @@ class Session(plugin.Feature):
         return self.E.session()
 
     def start(self, iq):
+        self.trigger(SessionStarted)
         return self.iq('result', iq)
 
     ### ---------- Client ----------

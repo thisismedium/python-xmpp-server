@@ -15,7 +15,8 @@ except ImportError:
 
 __all__ = (
     'ServerCore', 'ClientCore',
-    'ReceivedOpenStream', 'ReceivedCloseStream'
+    'ReceivedOpenStream', 'ReceivedCloseStream',
+    'SentOpenStream', 'SentCloseStream', 'StreamClosed'
 )
 
 class Core(i.CoreInterface):
@@ -220,7 +221,7 @@ class Core(i.CoreInterface):
             error.append(self.E.text({ 'xmlns': self.STANZAS }, text))
 
         stanza = self.E(elem.tag, {
-            'from': self.serverJID,
+            'from': unicode(self.serverJID),
             'type': 'error',
             'id': elem.get('id')
         })
@@ -328,14 +329,14 @@ class Core(i.CoreInterface):
     def routes(self, jid):
         if self.resources is None:
             raise state.NoRoute(jid)
-        return self.resources.routes(jid)
+        return self.resources.routes(xml.jid(jid))
 
     ### ---------- Private ----------
 
     def _read(self, data):
         if not self.stream:
             return
-        ## print 'read!', repr(data)
+
         try:
             self.parser.feed(data)
         except i.StreamError as exc:
@@ -358,7 +359,7 @@ class Core(i.CoreInterface):
             ## This causes a segfault when the stream is closed.
             ## self.parser.close()
             try:
-                self.state.clear()
+                self.state.trigger(StreamClosed).clear()
                 self.stream.shutdown()
             finally:
                 self.stream = None
@@ -377,6 +378,9 @@ class ReceivedOpenStream(i.Event):
 
 class ReceivedCloseStream(i.Event):
     """A </stream:stream> tag has been received."""
+
+class StreamClosed(i.Event):
+    """Triggered just before a stream is shutdown."""
 
 
 ### Client
@@ -397,7 +401,7 @@ class ClientCore(Core):
 
     def make_stream(self):
         return self.E(self.STREAM, {
-            'to': self.serverJID,
+            'to': unicode(self.serverJID),
             self.LANG: self.lang,
             'version': '1.0'
         })
@@ -418,14 +422,13 @@ class ServerCore(Core):
     def _opened(self):
         self.open_stream()
         if not self.send_features():
-            self.activate()
+            self.state.one(features.SessionStarted, thunk(self.activate))
+            pass
 
     def handle_stanza(self, elem):
         if self.authJID:
-            jid = elem.get('from')
-            assert not jid or jid == self.authJID, 'Expected %r' % self.authJID
-            if not jid:
-                elem.set('from', self.authJID)
+            if not elem.get('from'):
+                elem.set('from', unicode(self.authJID))
         self.state.trigger_stanza(elem.tag, elem)
 
     def handle_close_stream(self):
@@ -445,7 +448,7 @@ class ServerCore(Core):
         self.id = make_nonce()
 
         return self.E(self.STREAM, {
-            'from': self.serverJID,
+            'from': unicode(self.serverJID),
             'id': self.id,
             self.LANG: self.lang,
             'version': '1.0'

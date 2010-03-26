@@ -9,9 +9,9 @@ from lxml import etree, builder
 from . import interfaces as i
 
 __all__ = (
-    'Element', 'SubElement', 'tostring', 'XMLSyntaxError', 'ElementMaker',
+    'Element', 'SubElement', 'tostring', 'XMLSyntaxError', 'ElementMaker', 'E',
     'Parser', 'is_element', 'tag', 'text', 'child', 'xpath', 'clark',
-    'jid', 'is_full_jid', 'is_bare_jid',
+    'jid', 'bare', 'is_full_jid', 'is_bare_jid',
     'open_tag', 'close_tag', 'stanza_tostring'
 )
 
@@ -22,6 +22,7 @@ SubElement = etree.SubElement
 tostring = etree.tostring
 XMLSyntaxError = etree.XMLSyntaxError
 ElementMaker = builder.ElementMaker
+E = builder.E
 xpath = etree.ETXPath
 
 
@@ -222,39 +223,106 @@ def clark_path(expr, ns=None, nsmap=None):
         for t in expr.split('/')
     )
 
+class jid(object):
 
-JID = re.compile('([^@/]+)(?:@([^/]+))?(?:/(.+))?$')
+    __slots__ = ('name', 'host', 'resource', '_unicode')
 
-def jid(name, host=None, resource=None):
-    """Replace host or resource segments of a Jabber ID (JID).
+    PARSE = re.compile('([^@/]+)(?:@([^/]+))?(?:/(.+))?$')
 
-    >>> jid('foo', 'bar.com', 'baz')
-    u'foo@bar.com/baz'
-    >>> jid('foo@bar.com/baz', host='mumble.net')
-    u'foo@mumble.net/baz'
-    """
-    if host is None and resource is None:
-        return name
+    def __new__(cls, obj, host=None, resource=None):
+        if obj is None:
+            return None
+        elif isinstance(obj, jid) and host is None and resource is None:
+            return obj
+        return object.__new__(cls)
 
-    probe = JID.match(name)
-    if not probe:
-        raise i.StreamError('internal-server-error', 'Bad JID: %r' % name)
+    def __init__(self, obj, host=None, resource=None):
+        if isinstance(obj, jid):
+            self.name = obj.name
+            self.host = host or obj.host
+            self.resource = resource or obj.resource
+        else:
+            (self.name, self.host, self.resource) = \
+                self._parse(obj, host, resource)
+        self._unicode = self._make_unicode()
 
-    host = probe.group(2) if host is None else host
-    resource = probe.group(3) if resource is None else resource
-    if host and resource:
-        return u'%s@%s/%s' % (probe.group(1), host, resource)
-    elif host:
-        return u'%s@%s' % (probe.group(1), host)
-    else:
-        ## FIXME: Is this allowed?
-        return u'%s/%s' % (probe.group(1), resource)
+    def __repr__(self):
+        return '%s(%r, %r, %r)' % (
+            type(self).__name__, self.name, self.host, self.resource
+        )
+
+    def __unicode__(self):
+        return self._unicode
+
+    def __hash__(self):
+        return hash(self._unicode)
+
+    def __eq__(self, other):
+        if isinstance(other, jid):
+            other = other._unicode
+        if isinstance(other, basestring):
+            return self._unicode == other
+        return NotImplemented
+
+    def __ne__(self, other):
+        if isinstance(other, (jid, basestring)):
+            return not self == other
+        return NotImplemented
+
+    @property
+    def bare(self):
+        if not self.host:
+            raise ValueError('No host: %r.' % self)
+        return u'%s@%s' % (self.name, self.host)
+
+    @property
+    def full(self):
+        if not self.resource:
+            raise ValueError('No resource: %r.' % self)
+        return u'%s@%s/%s' % (self.name, self.host, self.resource)
+
+    def match_bare(self, other):
+        return self.bare == type(self)(other).bare
+
+    @classmethod
+    def _parse(cls, name, host=None, resource=None):
+        if not isinstance(name, basestring):
+            raise TypeError('Expected string, not %r.' % type(name))
+        probe = cls.PARSE.match(name)
+        if not probe:
+            raise i.StreamError('internal-server-error', 'Bad JID: %r' % name)
+
+        return (
+            probe.group(1),
+            probe.group(2) if host is None else host,
+            probe.group(3) if resource is None else resource
+        )
+
+    def _make_unicode(self):
+        if self.host and self.resource:
+            return self.full
+        elif self.host:
+            return self.bare
+        else:
+            ## FIXME: Is this allowed?
+            return u'%s/%s' % (self.name, resource)
+
+def bare(obj):
+    return jid(obj).bare
 
 def is_full_jid(obj):
-    return isinstance(obj, basestring) and '/' in obj
+    if isinstance(obj, basestring):
+        return '/' in obj
+    elif isinstance(obj, jid):
+        return bool(obj.host and obj.resource)
+    raise TypeError('Expected string or jid, not %r.' % type(obj))
 
 def is_bare_jid(obj):
-    return isisntance(obj, basestring) and '@' in obj and '/' not in obj
+    if isinstance(obj, basestring):
+        return '@' in obj and '/' not in obj
+    elif isinstance(obj, jid):
+        return jid.host and not jid.resource
+    raise TypeError('Expected string or jid, not %r.' % type(obj))
 
 
 ### Hacks

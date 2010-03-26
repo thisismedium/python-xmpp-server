@@ -471,6 +471,16 @@ class Plugin(object):
 
     ## ---------- Stream ----------
 
+    def send(self, where, what):
+        return self._transmit('handle', where, what)
+
+    def recv(self, where, what):
+        return self._transmit('write', where, what)
+
+    def handle(self, *args):
+        self.__core.handle_stanza(*args)
+        return self
+
     def write(self, *args):
         self.__core.write(*args)
         return self
@@ -544,6 +554,20 @@ class Plugin(object):
         self.__core.stream_error(*args, **kwargs)
         ## Stream-level errors are not recoverable.
         return None
+
+    def _transmit(self, method, where, what):
+        from .features import NoRoute # FIXME: ugly circular import.
+
+        try:
+            for (jid, route) in self.routes(where):
+                getattr(route, method)(what)
+        except NoRoute:
+            log.warning('transmit(%r, %r, %r)',
+                        method,
+                        where,
+                        xml.tostring(what),
+                        exc_info=True)
+        return self
 
     ## ---------- Events ----------
 
