@@ -195,6 +195,9 @@ class Rosters(object):
     def confirm(self, conn, roster, item):
         conn.push(roster, conn.E.query({ 'xmlns': 'jabber:iq:roster' }, item))
 
+
+### Rosters
+
 Item = namedtuple('Item', 'attr groups')
 
 class Roster(object):
