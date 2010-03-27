@@ -223,7 +223,7 @@ class Roster(object):
 
         return self._requests
 
-    def precence(self, jid, presense):
+    def presence(self, jid, presense):
         """Update the last presence sent from a client."""
 
         self._last[jid] = presense
