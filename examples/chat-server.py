@@ -345,6 +345,7 @@ if __name__ == '__main__':
         'plugins': [(ChatServer, { 'rosters': Rosters() })],
         'host': 'localhost',
         'users': { 'user1': 'password1', 'user2': 'password2' }
+        ## Uncomment to use TLS:
         ## 'certfile': os.path.join(os.path.dirname(__file__), 'certs/self.crt'),
         ## 'keyfile': os.path.join(os.path.dirname(__file__), 'certs/self.key')
     })
