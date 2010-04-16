@@ -1,4 +1,4 @@
-## Copyright (c) 2010, Coptix, Inc.  All rights reserved.
+# Copyright (c) 2010, Coptix, Inc.  All rights reserved.
 ## See the LICENSE file for license terms and warranty disclaimer.
 
 """readstream -- non-blocking unbuffered reads / buffered writes"""
@@ -65,6 +65,7 @@ class ReadStream(object):
         """Immediately close the stream."""
 
         if self.socket:
+            if __debug__: log.debug('CLOSE')
             self.io.remove_handler(self.socket.fileno())
             self.socket.close()
             self.socket = None
@@ -137,6 +138,8 @@ class ReadStream(object):
                 self.close()
                 return
 
+        if __debug__: log.debug('READ: %r', chunk)
+
         if not chunk:
             self.close()
             return
@@ -147,7 +150,7 @@ class ReadStream(object):
         while self._wb:
             try:
                 sent = self.socket.send(self._wb)
-                ## print 'wrote!', self._wb[:sent]
+                if __debug__: log.debug('WROTE: %r', self._wb[:sent])
                 self._wb = self._wb[sent:]
             except aio.SocketError as exc:
                 if aio.would_block(exc):
