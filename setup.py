@@ -11,5 +11,5 @@ setup(
     keywords = 'server xmpp jabber',
 
     packages = list(find_packages(exclude=('examples', ))),
-    install_requires = ['pycurl==7.16.2.1', 'simplejson', 'tornado', 'lxml']
+    install_requires = ['pycurl==7.19.0', 'simplejson', 'tornado', 'lxml']
 )
