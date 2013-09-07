@@ -101,7 +101,7 @@ class TCPClient(object):
     previous example:
 
         def talk(socket, io):
-            stream = IOStream(socket, io=io)
+            stream = IOStream(socket, io_loop=io)
             messages = [0]
 
             def handle(data):
