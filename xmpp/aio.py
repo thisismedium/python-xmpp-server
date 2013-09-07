@@ -37,7 +37,7 @@ class TCPServer(object):
             loop()
 
         server = xmpp.TCPServer(echo).bind('127.0.0.1', '9000')
-        start([server])
+        xmpp.start([server])
     """
 
     def __init__(self, handler, io=None):
